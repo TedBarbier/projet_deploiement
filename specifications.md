@@ -51,8 +51,8 @@ flowchart LR
     subgraph LAB ["lab_network"]
         direction LR
         RP["Reverse Proxy (Caddy)<br/>HTTPS :443"]
-        API["Go API (Gin)<br/>:8080"]
-        SCHED["Go Scheduler"]
+        API["Rest API <br/>:8080"]
+        SCHED["Scheduler"]
         DB[(MariaDB)]
 
         RP -->|Flux 2: HTTP :8080| API
@@ -64,8 +64,8 @@ flowchart LR
     Client -->|Flux 1: HTTPS :443| RP
 
     %% Connexions du Control Plane vers le Data Plane (SSH)
-    API -.->|Flux 4: Provisioning<br/>(SSH via host.docker.internal)| Workers
-    SCHED -.->|Flux 5: Health Check<br/>(SSH via host.docker.internal)| Workers
+    API -.->|"Flux 4: Provisioning<br/>(SSH via host.docker.internal)"| Workers
+    SCHED -.->|"Flux 5: Health Check<br/>(SSH via host.docker.internal)"| Workers
 ```
 **Explication des flux :**
 
