@@ -39,10 +39,6 @@ Ce schéma illustre le modèle à inventaire statique où le Control Plane initi
 
 ```mermaid
 flowchart LR
-    %% Définir le style pour les connexions SSH en pointillés
-    linkStyle 3 stroke-dasharray: 5 5
-    linkStyle 4 stroke-dasharray: 5 5
-
     %% Entités Hors Réseau
     Client["Client (curl/CLI)"]
 
@@ -69,7 +65,7 @@ flowchart LR
 
     %% Connexions du Control Plane vers le Data Plane (SSH)
     API -.->|Flux 4: Provisioning<br/>(SSH via host.docker.internal)| Workers
-    SCHED -.->|Flux 5: Health Check<br/>(SSH via host.docker.internal)| Workers](https://docs.github.com/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams#creating-mermaid-diagrams)
+    SCHED -.->|Flux 5: Health Check<br/>(SSH via host.docker.internal)| Workers
 ```
 **Explication des flux :**
 
