@@ -43,12 +43,12 @@ flowchart LR
     Client["Client (curl/CLI)"]
 
     %% Subgraph pour l'Hôte Docker (Data Plane)
-    subgraph HOTE [Host (Docker Engine)]
+    subgraph HOTE ["Host (Docker Engine)"]
         Workers["Workers (Alpine)<br/>Port 22221..N -> 22"]
     end
 
     %% Subgraph pour le Réseau de Contrôle (Control Plane)
-    subgraph LAB [lab_network]
+    subgraph LAB ["lab_network"]
         direction LR
         RP["Reverse Proxy (Caddy)<br/>HTTPS :443"]
         API["Go API (Gin)<br/>:8080"]
