@@ -239,7 +239,41 @@ def rent_node():
             cursor.close()
             conn.close()
 
+    
+
 # --- BLOC DE DÉMARRAGE (LA CORRECTION) ---
 if __name__ == "__main__":
     app.logger.info("--- Démarrage du serveur Flask en mode DEBUG ---")
     app.run(host='0.0.0.0', port=8080, debug=True)
+
+@app.route('/api/reset', methods=['POST'])
+def reset_database():
+    """
+    Vider les tables nodes et éventuellement les locations pour repartir à zéro.
+    ATTENTION: uniquement pour tests, pas en production !
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Connexion à la base de données impossible"}), 500
+
+        cursor = conn.cursor()
+        
+        # Vider les tables
+        cursor.execute("DELETE FROM nodes;")
+        cursor.execute("ALTER TABLE nodes AUTO_INCREMENT = 1;")  # Reset ID
+        conn.commit()
+        
+        app.logger.info("Base de données réinitialisée avec succès.")
+        return jsonify({"message": "Base de données réinitialisée."}), 200
+
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la réinitialisation: {e}")
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "Erreur serveur interne"}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()

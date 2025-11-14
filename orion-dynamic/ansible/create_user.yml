@@ -6,6 +6,7 @@
   # Permet à Ansible de continuer même si la clé SSH de l'hôte n'est pas connue
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    
 
   tasks:
     - name: Ensure the client user exists
@@ -14,12 +15,3 @@
         password: "{{ target_pass | password_hash('sha512') }}"
         state: present
         shell: /bin/sh
-        groups: sudo
-
-    - name: Allow 'sudo' group to have passwordless sudo
-      ansible.builtin.lineinfile:
-        path: /etc/sudoers
-        state: present
-        regexp: '^%sudo'
-        line: '%sudo ALL=(ALL) NOPASSWD: ALL'
-        validate: '/usr/sbin/visudo -csf %s'
