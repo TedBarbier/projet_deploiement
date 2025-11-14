@@ -39,33 +39,42 @@ Ce schéma illustre le modèle à inventaire statique où le Control Plane initi
 
 ```mermaid
 flowchart LR
-    %% Entités Hors Réseau
+    %% Acteurs Externes
+    Admin["Admin (docker run)"]
     Client["Client (curl/CLI)"]
 
     %% Subgraph pour l'Hôte Docker (Data Plane)
     subgraph HOTE ["Host (Docker Engine)"]
-        Workers["Workers (Alpine)<br/>Port 22221..N -> 22"]
+        Workers["Workers (Alpine + Agent)<br/>Port 22221..N -> 22"]
     end
 
     %% Subgraph pour le Réseau de Contrôle (Control Plane)
     subgraph LAB ["lab_network"]
         direction LR
-        RP["Reverse Proxy (Caddy)<br/>HTTPS :443"]
+        RP["Reverse Proxy (Caddy)<br/>:443 (Client)<br/>:80 (Agent)"]
         API["Rest API <br/>:8080"]
         SCHED["Scheduler"]
         DB[(MariaDB)]
 
-        RP -->|Flux 2: HTTP :8080| API
-        API -->|Flux 3: SQL| DB
-        SCHED -->|Flux 3: SQL| DB
+        RP -- "Flux 1 & 2" --> API
+        API -->|SQL| DB
+        SCHED -->|SQL| DB
     end
 
-    %% Connexions Externes vers Internes
-    Client -->|Flux 1: HTTPS :443| RP
+    %% -- FLUX --
+    
+    %% Flux 0: Enregistrement (Nouveau)
+    Admin -- "docker run -p 2222N:22" --> Workers
+    Workers -- "Flux 0: POST /api/register<br/>(via host.docker.internal:80)" --> RP
 
-    %% Connexions du Control Plane vers le Data Plane (SSH)
-    API -.->|"Flux 4: Provisioning<br/>(SSH via host.docker.internal)"| Workers
-    SCHED -.->|"Flux 5: Health Check<br/>(SSH via host.docker.internal)"| Workers
+    %% Flux 1: Location Client (Inchangé)
+    Client -->|Flux 1: POST /api/rent<br/>(via HTTPS :443)| RP
+
+    %% Flux 4: Provisioning (Inchangé)
+    API -.->|"Flux 4: Provisioning<br/>(Ansible via SSH)"| Workers
+    
+    %% Flux 5: QoS (Inchangé)
+    SCHED -.->|"Flux 5: Health Check & Cleanup<br/>(SSH & Ansible)"| Workers
 ```
 **Explication des flux :**
 
