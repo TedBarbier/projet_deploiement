@@ -1,0 +1,33 @@
+{
+    # Active le TLS (HTTPS) en interne
+    local_certs
+}
+
+# Endpoint public pour les clients (HTTPS)
+:443 {
+    tls internal
+
+    # Route /api/ vers le service API
+    handle_path /api/* {
+        reverse_proxy api:8080 {
+            # Dire à Caddy quel endpoint sonder
+            health_uri /api/health
+            health_interval 10s
+        }
+    }
+
+    handle {
+        respond "Projet Orion-Dynamic - API" 200
+    }
+}
+
+# Endpoint INTERNE pour l enregistrement des workers (HTTP)
+:80 {
+    handle_path /api/* {
+        reverse_proxy api:8080 {
+            # Dire à Caddy quel endpoint sonder
+            health_uri /api/health
+            health_interval 10s
+        }
+    }
+}

@@ -1,0 +1,14 @@
+---
+- name: De-provision user from a worker node
+  hosts: all
+  become: yes
+  gather_facts: no
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  tasks:
+    - name: Ensure the client user is removed
+      ansible.builtin.user:
+        name: "{{ target_user }}"
+        state: absent
+        remove: yes # Supprime aussi le home directory

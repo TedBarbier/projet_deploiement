@@ -1,0 +1,5 @@
+flask
+gunicorn
+mysql-connector-python
+python-dotenv
+ansible-runner

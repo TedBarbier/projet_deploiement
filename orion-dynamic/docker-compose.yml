@@ -1,0 +1,88 @@
+services:
+  db:
+    image: mariadb:10.6
+    container_name: orion-db
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./control-plane/db_init:/docker-entrypoint-initdb.d
+    networks:
+      - lab_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  api:
+    container_name: orion-api
+    build:
+      context: .
+      dockerfile: ./control-plane/api/Dockerfile
+    restart: always
+    depends_on:
+      db: 
+        condition: service_healthy
+    networks:
+      - lab_network
+    environment:
+      - DB_HOST=db
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      # Identifiants SSH pour qu'Ansible se connecte aux workers
+      - WORKER_SSH_USER=root
+      - WORKER_SSH_PASS=password
+    # Permet à l'API de contacter l'hôte (et les ports mappés des workers)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  scheduler:
+    container_name: orion-scheduler
+    build:
+      context: .
+      dockerfile: ./control-plane/scheduler/Dockerfile
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lab_network
+    environment:
+      - DB_HOST=db
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      # Identifiants SSH pour Paramiko (health check) et Ansible (cleanup)
+      - WORKER_SSH_USER=root
+      - WORKER_SSH_PASS=password
+    # Permet au Scheduler de contacter l'hôte pour les health checks SSH
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  proxy:
+    image: caddy:2
+    container_name: orion-proxy
+    restart: always
+    ports:
+      - "80:80"   # Pour les agents
+      - "443:443" # Pour les clients
+    volumes:
+      - ./control-plane/proxy/Caddyfile:/etc/caddy/Caddyfile
+    networks:
+      - lab_network
+    depends_on:
+      - api
+
+networks:
+  lab_network:
+    driver: bridge
+
+volumes:
+  db_data:

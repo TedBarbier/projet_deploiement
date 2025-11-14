@@ -1,0 +1,6 @@
+mysql-connector-python
+python-dotenv
+schedule
+paramiko
+cffi
+ansible-runner
