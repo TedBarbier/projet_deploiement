@@ -2,6 +2,7 @@ FROM alpine:latest
 
 # Installation des paquets
 RUN apk add --no-cache openssh-server sudo python3 py3-pip py3-requests
+RUN addgroup --system sudo || true
 
 # Configuration de SSH (pour root:password)
 RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \

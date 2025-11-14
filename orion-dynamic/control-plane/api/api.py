@@ -147,103 +147,97 @@ def rent_node():
     Appelé par les clients pour louer un noeud.
     Doit être transactionnel pour éviter les "race conditions".
     """
-    # --- TEST BANAL ---
-    # On commente tout pour voir si la route est atteinte
+    # --- VRAIE LOGIQUE (le test est fini) ---
     app.logger.info("!!!!!!!!!! Requête /api/rent reçue !!!!!!!!!!")
-    return jsonify({"message": "TEST REUSSI - /api/rent a été atteint"}), 200
-    # ------------------
     
-    # data = request.get_json()
-    # try:
-    #     client_id = data['client_id']
-    #     duration_hours = int(data['duration_hours'])
-    # except Exception:
-    #     return jsonify({"error": "Données JSON manquantes: 'client_id' et 'duration_hours' requis"}), 400
+    data = request.get_json()
+    try:
+        client_id = data['client_id']
+        duration_hours = int(data['duration_hours'])
+    except Exception:
+        return jsonify({"error": "Données JSON manquantes: 'client_id' et 'duration_hours' requis"}), 400
 
-    # conn = None
-    # try:
-    #     conn = get_db_connection()
-    #     if not conn:
-    #         return jsonify({"error": "Connexion à la base de données impossible"}), 500
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Connexion à la base de données impossible"}), 500
         
-    #     # --- Début de la TRANSACTION ---
-    #     # C'est crucial pour éviter que deux clients louent le même nœud
-    #     conn.start_transaction()
-    #     cursor = conn.cursor(dictionary=True) # dictionary=True pour get les résultats en dict
+        # --- Début de la TRANSACTION ---
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True) # dictionary=True pour get les résultats en dict
 
-    #     # 1. Trouver et VERROUILLER un nœud disponible
-    #     # 'FOR UPDATE' verrouille la ligne jusqu'à COMMIT ou ROLLBACK
-    #     sql_find = """
-    #         SELECT * FROM nodes
-    #         WHERE status = 'alive' AND allocated = false
-    #         ORDER BY last_checked DESC
-    #         LIMIT 1
-    #         FOR UPDATE
-    #     """
-    #     cursor.execute(sql_find)
-    #     node = cursor.fetchone()
+        # 1. Trouver et VERROUILLER un nœud disponible
+        sql_find = """
+            SELECT * FROM nodes
+            WHERE status = 'alive' AND allocated = false
+            ORDER BY last_checked DESC
+            LIMIT 1
+            FOR UPDATE
+        """
+        cursor.execute(sql_find)
+        node = cursor.fetchone()
 
-    #     if not node:
-    #         # Aucun nœud disponible
-    #         app.logger.warning("Aucun worker 'alive' et 'disponible' trouvé pour une location.")
-    #         conn.rollback()
-    #         return jsonify({"error": "Aucun service disponible (pas de worker libre)"}), 503
+        if not node:
+            # Aucun nœud disponible
+            app.logger.warning("Aucun worker 'alive' et 'disponible' trouvé pour une location.")
+            conn.rollback()
+            return jsonify({"error": "Aucun service disponible (pas de worker libre)"}), 503
 
-    #     app.logger.info(f"Nœud {node['id']} ({node['hostname']}:{node['ssh_port']}) trouvé pour {client_id}.")
+        app.logger.info(f"Nœud {node['id']} ({node['hostname']}:{node['ssh_port']}) trouvé pour {client_id}.")
 
-    #     # 2. Calculer le bail et mettre à jour le nœud
-    #     lease_end = datetime.now() + timedelta(hours=duration_hours)
-    #     sql_update = """
-    #         UPDATE nodes
-    #         SET allocated = true, allocated_to = %s, lease_end_at = %s
-    #         WHERE id = %s
-    #     """
-    #     cursor.execute(sql_update, (client_id, lease_end, node['id']))
+        # 2. Calculer le bail et mettre à jour le nœud
+        lease_end = datetime.now() + timedelta(hours=duration_hours)
+        sql_update = """
+            UPDATE nodes
+            SET allocated = true, allocated_to = %s, lease_end_at = %s
+            WHERE id = %s
+        """
+        cursor.execute(sql_update, (client_id, lease_end, node['id']))
         
-    #     # 3. Provisionner le nœud (Ansible)
-    #     # Générer un mot de passe sécurisé pour le client
-    #     alphabet = string.ascii_letters + string.digits
-    #     client_pass = ''.join(secrets.choice(alphabet) for i in range(16))
+        # 3. Provisionner le nœud (Ansible)
+        alphabet = string.ascii_letters + string.digits
+        client_pass = ''.join(secrets.choice(alphabet) for i in range(16))
         
-    #     success = run_ansible_provision(
-    #         playbook_name='create_user.yml',
-    #         host_ip=node['hostname'],
-    #         host_port=node['ssh_port'],
-    #         client_user=client_id,
-    #         client_pass=client_pass
-    #     )
+        success = run_ansible_provision(
+            playbook_name='create_user.yml',
+            host_ip=node['hostname'],
+            host_port=node['ssh_port'],
+            client_user=client_id,
+            client_pass=client_pass
+        )
 
-    #     if not success:
-    #         # Si Ansible échoue, on annule TOUT
-    #         app.logger.error(f"Échec du provisioning Ansible pour {node['id']}. Rollback.")
-    #         conn.rollback()
-    #         return jsonify({"error": "Échec du provisioning du worker"}), 500
+        if not success:
+            # Si Ansible échoue, on annule TOUT
+            app.logger.error(f"Échec du provisioning Ansible pour {node['id']}. Rollback.")
+            conn.rollback()
+            return jsonify({"error": "Échec du provisioning du worker"}), 500
         
-    #     # 4. TOUT a réussi -> COMMIT
-    #     conn.commit()
+        # 4. TOUT a réussi -> COMMIT
+        conn.commit()
         
-    #     app.logger.info(f"Location réussie. Nœud {node['id']} alloué à {client_id} jusqu'à {lease_end}.")
+        app.logger.info(f"Location réussie. Nœud {node['id']} alloué à {client_id} jusqu'à {lease_end}.")
         
-    #     # 5. Renvoyer les détails de connexion au client
-    #     return jsonify({
-    #         "message": "Nœud alloué avec succès",
-    #         "node_id": node['id'],
-    #         "connect_host": node['hostname'],
-    #         "connect_port": node['ssh_port'],
-    #         "client_user": client_id,
-    #         "client_pass": client_pass, # Ne pas faire ça en production, mais OK pour le labo
-    #         "lease_end_at": lease_end.isoformat()
-    #     }), 200
+        # 5. Renvoyer les détails de connexion au client
+        return jsonify({
+            "message": "Nœud alloué avec succès",
+            "node_id": node['id'],
+            "connect_host": node['hostname'],
+            "connect_port": node['ssh_port'],
+            "client_user": client_id,
+            "client_pass": client_pass, # Ne pas faire ça en production, mais OK pour le labo
+            "lease_end_at": lease_end.isoformat()
+        }), 200
 
-    # except Exception as e:
-    #     app.logger.error(f"Erreur interne lors de la location: {e}")
-    #     if conn:
-    #         conn.rollback() # Annuler en cas d'erreur
-    #     return jsonify({"error": "Erreur serveur interne"}), 500
-    # finally:
-    #     if conn and conn.is_connected():
-    #         cursor.close()
-    #         conn.close()
+    except Exception as e:
+        app.logger.error(f"Erreur interne lors de la location: {e}")
+        if conn:
+            conn.rollback() # Annuler en cas d'erreur
+        return jsonify({"error": "Erreur serveur interne"}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
 
 # --- BLOC DE DÉMARRAGE (LA CORRECTION) ---
 if __name__ == "__main__":

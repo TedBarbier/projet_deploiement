@@ -1,28 +1,32 @@
 FROM python:3.10-slim
 
-# Installer les dépendances système pour Ansible
+# Dépendances système pour Ansible
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     sshpass \
+    openssh-client \
+    python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Installer Ansible et ansible-runner
+RUN pip install --no-cache-dir ansible ansible-runner
+
 WORKDIR /app
+
+# Installer les dépendances Python de l’API
 COPY ./control-plane/api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copier le code API
 COPY ./control-plane/api .
 
-# Copier les playbooks Ansible dans l'image
+# Copier les playbooks Ansible
 COPY ./ansible /ansible
 
-# --- CORRECTION AJOUTÉE ---
-# "Nettoie" le fichier api.py en remplaçant les espaces insécables (U+00A0)
-# par des espaces normaux (ASCII 32).
+# Nettoyer les espaces insécables
 RUN sed -i 's/\xc2\xa0/ /g' api.py
-# -------------------------
 
-# Laisser des fichiers vides pour que Gunicorn démarre (n'est plus nécessaire)
-# RUN touch api.py
+# Lancer Gunicorn
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "api:app"]
 
-# --- MODIFIER CETTE LIGNE ---
-#CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "api:app"]
-CMD ["python3", "api.py"]
