@@ -25,8 +25,8 @@ L'orchestrateur doit :
 Le système est composé de deux ensembles :
 * **Le "Control Plane" (Réseau Docker "lab") :** Contient la logique de gestion.
     * `Reverse Proxy` (Caddy/Nginx) : Point d'entrée pour les clients humains.
-    * `API` (Go/Gin) : Gère les demandes de location.
-    * `Scheduler` (Go) : Gère la surveillance et la migration.
+    * `API` (Python) : Gère les demandes de location.
+    * `Scheduler`  : Gère la surveillance et la migration.
     * `Database` (MariaDB) : Stocke l'état de l'inventaire et des locations.
 * **Le "Data Plane" (Hôte Docker) :**
     * `Workers` (Conteneurs Alpine) : Les ressources passives. Exécutent un serveur SSH et sont mappés sur des ports de l'hôte (ex: `22221 -> 22`).
@@ -70,7 +70,7 @@ flowchart LR
 **Explication des flux :**
 
 * **Flux 1 (Location Client) :** Le `Client` envoie `POST /api/rent` au `Reverse Proxy` (point d'entrée public).
-* **Flux 2 (Proxy Pass) :** Le `Proxy` transfère la requête à l'`API (Go/Gin)`.
+* **Flux 2 (Proxy Pass) :** Le `Proxy` transfère la requête à l'`API (Pythonè)`.
 * **Flux 3 (État) :** L'`API` et le `Scheduler` lisent/écrivent constamment dans la `Database` (MariaDB) pour connaître/modifier l'état des nœuds et des locations.
 * **Flux 4 (Provisioning) :** L'`API` (suite à une location) initie une connexion **SSH sortante** (ex: `ssh host.docker.internal:22221`) vers le `Worker` pour le provisionner (via Ansible).
 * **Flux 5 (Health Check / QoS) :** Le `Scheduler` initie des connexions **SSH sortantes** (ex: `ssh host.docker.internal:22221`, `...:22222`, etc.) pour vérifier la santé de **tous** les `Workers` (loués ou non).
@@ -84,7 +84,7 @@ flowchart LR
 * **En tant qu'Admin,** je veux un script séparé (ou un autre Compose) pour lancer le "Data Plane" (les N `Workers` Alpine avec leurs ports SSH mappés).
 * L'inventaire des Workers (ex: `host.docker.internal:22221`) est fourni à l'API et au Scheduler (ex: via un fichier de config ou des variables d'env.).
 
-#### 5.2. API (Go/Gin)
+#### 5.2. API (Python)
 * **`POST /api/rent` :** (Appelé par le Client, via Proxy)
     1.  Interroge la `DB` pour trouver un `Worker` avec `status = 'alive'` ET `allocated = false`.
     2.  Si aucun n'est trouvé, renvoie 503 (Service Unavailable).
@@ -92,7 +92,7 @@ flowchart LR
     4.  Appelle **Ansible** (Flux 4) pour provisionner ce Worker.
     5.  Renvoie les détails de connexion au client.
 
-#### 5.3. Scheduler (Go) - La QoS
+#### 5.3. Scheduler - La QoS
 * **Tâche 1 : Health Check (Toutes les 30s)**
     1.  Itère sur **TOUT** l'inventaire des Workers (de la DB ou config).
     2.  Pour chaque Worker, tente une connexion SSH (Flux 5).
@@ -112,11 +112,11 @@ flowchart LR
 
 ### 6. 📦 Livrables Attendus
 
-1.  **Code Source :** Le code Go pour l'API et le Scheduler.
+1.  **Code Source :** Le code Python pour l'API et le Scheduler.
 2.  **Fichiers IaC :**
     * `docker-compose.yml` pour le "Control Plane".
-    * `Dockerfile` pour l'API (Go, Ansible).
-    * `Dockerfile` pour le Scheduler (Go).
+    * `Dockerfile` pour l'API (Python, Ansible).
+    * `Dockerfile` pour le Scheduler.
     * `Dockerfile` pour le Worker (Alpine, `openssh-server`).
     * Fichier de configuration Nginx/Caddy pour le Proxy.
 3.  **Scripts d'Automatisation :**
