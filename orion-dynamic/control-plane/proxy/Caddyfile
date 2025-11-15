@@ -1,7 +1,12 @@
 # Local-only HTTPS on https://localhost (port 443), proxying to the API service.
 # Uses Caddy's internal CA (self-signed). Browser will show a warning unless you trust Caddy's local root CA.
 
-:443 {
+localhost:443 {
+    tls internal
+    encode zstd gzip
+    reverse_proxy http://api:8080
+}
+host.docker.internal:443 {
     tls internal
     encode zstd gzip
     reverse_proxy http://api:8080

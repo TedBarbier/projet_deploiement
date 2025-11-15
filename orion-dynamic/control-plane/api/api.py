@@ -240,9 +240,13 @@ def rent_nodes():
       "ssh_password": "chosen_by_user"  # optional; if not provided API generates one per node
     }
     """
+    import secrets, string
+    from datetime import datetime, timedelta
+
     data = request.get_json() or {}
     client_name = request.user["username"]
 
+    # Vérification de la durée
     try:
         duration_hours = int(data.get("duration_hours", 0))
         if duration_hours <= 0:
@@ -250,6 +254,7 @@ def rent_nodes():
     except Exception:
         return jsonify({"error": "duration_hours invalide"}), 400
 
+    # Vérification du nombre de noeuds
     try:
         count = int(data.get("count", 1))
         if count < 1:
@@ -267,7 +272,7 @@ def rent_nodes():
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
 
-        # Find available nodes
+        # Récupérer les noeuds libres
         cur.execute(f"""
             SELECT * FROM nodes
             WHERE status='alive' AND allocated=FALSE
@@ -287,8 +292,12 @@ def rent_nodes():
 
         for node in nodes:
             node_id = node["id"]
-            host = node["hostname"]
+            host_ip = node["ip"]
             port = node["ssh_port"]
+
+            # Exception Docker : remplacer l'IP par host.docker.internal si IP interne Docker
+            if host_ip.startswith("172.17."):
+                host_ip = "host.docker.internal"
 
             client_pass = ssh_password_given or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
 
@@ -298,12 +307,13 @@ def rent_nodes():
                 VALUES (%s, %s, %s, %s, TRUE)
             """
             cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end))
+            cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
             rental_id = cur.lastrowid
 
             # Provisioning
             success = run_ansible_provision(
                 playbook_name='create_user.yml',
-                host_ip=host,
+                host_ip=host_ip,
                 host_port=port,
                 client_user=client_name,
                 client_pass=client_pass
@@ -316,12 +326,11 @@ def rent_nodes():
 
             allocated.append({
                 "rental_id": rental_id,
-                "node_id": node_id,
-                "hostname": host,
+                "host_ip": "host.docker.internal" if node["ip"].startswith("172.17.") else node["ip"],
                 "ssh_port": port,
                 "client_user": client_name,
                 "client_pass": client_pass,
-                "leased_until": lease_end.isoformat()
+                "leased_until": lease_end.isoformat(),
             })
 
         conn.commit()
@@ -510,18 +519,19 @@ def list_nodes():
 @app.route('/api/workers/register', methods=['POST'])
 def register_worker():
     """
-    Appelé par les agents 'agent.py' au démarrage.è
-    Enregistre un worker dans la base de données.
+    Appelé par les agents 'agent.py' au démarrage.
+    Enregistre un worker dans la base de données avec hostname, IP et port SSH.
     """
     data = request.get_json()
-    if not data or 'hostname' not in data or 'ssh_port' not in data:
-        return jsonify({"error": "Données JSON manquantes: 'hostname' et 'ssh_port' requis"}), 400
+    if not data or 'hostname' not in data or 'ip' not in data or 'ssh_port' not in data:
+        return jsonify({"error": "Données JSON manquantes: 'hostname', 'ip' et 'ssh_port' requis"}), 400
 
     hostname = data['hostname']
+    ip = data['ip']
     ssh_port = data['ssh_port']
+    
 
-    # Statut initial 'unknown'
-    sql = "INSERT INTO nodes (hostname, ssh_port, status) VALUES (%s, %s, 'unknown')"
+    sql = "INSERT INTO nodes (hostname, ip, ssh_port, status) VALUES (%s, %s, %s, 'unknown')"
 
     conn = None
     cursor = None
@@ -531,15 +541,15 @@ def register_worker():
             return jsonify({"error": "Connexion à la base de données impossible"}), 500
 
         cursor = conn.cursor()
-        cursor.execute(sql, (hostname, ssh_port))
+        cursor.execute(sql, (hostname, ip, ssh_port))
         conn.commit()
 
-        app.logger.info(f"Nouveau worker enregistré : {hostname}:{ssh_port}")
+        app.logger.info(f"Nouveau worker enregistré : {hostname} ({ip}):{ssh_port}")
         return jsonify({"message": "Worker enregistré avec succès"}), 201
 
     except mysql.connector.Error as err:
         if err.errno == errorcode.ER_DUP_ENTRY:
-            app.logger.warning(f"Worker {hostname}:{ssh_port} déjà enregistré.")
+            app.logger.warning(f"Worker {hostname} ({ip}):{ssh_port} déjà enregistré.")
             return jsonify({"message": "Worker déjà enregistré"}), 409
         else:
             app.logger.error(f"Erreur DB lors de l'enregistrement: {err}")
@@ -571,8 +581,8 @@ def reset_database():
         return jsonify({"error": "DB non disponible"}), 500
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM leases;")
-        cur.execute("ALTER TABLE leases AUTO_INCREMENT = 1;")
+        cur.execute("DELETE FROM rentals;")
+        cur.execute("ALTER TABLE rentals AUTO_INCREMENT = 1;")
         cur.execute("DELETE FROM nodes;")
         cur.execute("ALTER TABLE nodes AUTO_INCREMENT = 1;")
         conn.commit()

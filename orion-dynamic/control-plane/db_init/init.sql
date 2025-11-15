@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     -- Infos fournies par l'agent
     hostname VARCHAR(255) NOT NULL,
+    ip VARCHAR(45) NOT NULL,
     ssh_port INT NOT NULL,
 
     -- Géré par le Scheduler
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Alloué ou non (sera utilisé comme "lock" rapide)
     allocated BOOLEAN NOT NULL DEFAULT FALSE,
 
-    UNIQUE KEY uq_node_inventory (hostname, ssh_port)
+    UNIQUE KEY uq_node_inventory (hostname, ip, ssh_port)
 );
 
 -- ===========================
