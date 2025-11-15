@@ -1,0 +1,86 @@
+##############################
+# GitIgnore - Orion Dynamic  #
+##############################
+
+# OS / Filesystem
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Python cache & artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.ipynb_checkpoints/
+
+# Python packaging/build
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Python test/typing caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.hypothesis/
+.pyre/
+.pytype/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Logs & temp
+*.log
+log/
+logs/
+tmp/
+.cache/
+
+# Docker / Compose (local-only files)
+.docker/
+docker-compose.override.yml
+
+# Ansible
+*.retry
+.ansible/
+.ansible_async/
+.vault_pass
+
+# Caddy (local state if used outside containers)
+caddy/data/
+caddy/config/
+
+# Shell / editor temp files
+*.swp
+*.swo
+*.bak
+
+# Environment files (secrets)
+.env
+.env.*
+*.env
+!*.env.example
+
+# Project-specific sensitive files
+orion-dynamic/.env
+

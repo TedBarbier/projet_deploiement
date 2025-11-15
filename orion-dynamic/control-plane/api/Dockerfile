@@ -28,5 +28,5 @@ COPY ./ansible /ansible
 RUN sed -i 's/\xc2\xa0/ /g' api.py
 
 # Lancer Gunicorn
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "api:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "api:app"]
 

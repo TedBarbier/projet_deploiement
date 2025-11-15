@@ -32,16 +32,7 @@ services:
     networks:
       - lab_network
     environment:
-      - DB_HOST=db
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      # Identifiants SSH pour qu'Ansible se connecte aux workers
-      - WORKER_SSH_USER=root
-      - WORKER_SSH_PASS=password
-    # Permet à l'API de contacter l'hôte (et les ports mappés des workers)
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - DB
 
   scheduler:
     container_name: orion-scheduler
@@ -71,7 +62,6 @@ services:
     container_name: orion-proxy
     restart: always
     ports:
-      - "80:80"   # Pour les agents
       - "443:443" # Pour les clients
     volumes:
       - ./control-plane/proxy/Caddyfile:/etc/caddy/Caddyfile

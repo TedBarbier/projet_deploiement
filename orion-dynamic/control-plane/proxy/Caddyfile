@@ -1,33 +1,8 @@
-{
-    local_certs
-    auto_https disable_redirects
-}
+# Local-only HTTPS on https://localhost (port 443), proxying to the API service.
+# Uses Caddy's internal CA (self-signed). Browser will show a warning unless you trust Caddy's local root CA.
 
-# --- HTTPS local ---
-https://localhost {
+:443 {
     tls internal
-
-    # Reverse proxy pour toute l'API — ne pas utiliser handle_path !
-    handle /api/* {
-        reverse_proxy api:8080 {
-            health_uri /api/health
-            health_interval 10s
-        }
-    }
-
-    # Réponse par défaut
-    handle {
-        respond "Orion-Dynamic - API via Caddy" 200
-    }
+    encode zstd gzip
+    reverse_proxy http://api:8080
 }
-
-# --- HTTP interne ---
-:80 {
-    handle /api/* {
-        reverse_proxy api:8080 {
-            health_uri /api/health
-            health_interval 10s
-        }
-    }
-}
-

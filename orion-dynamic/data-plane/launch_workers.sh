@@ -8,7 +8,7 @@ IMAGE_NAME="orion-dynamic-worker:latest"
 BASE_SSH_PORT=22220 # On commencera à 22221 (22220 + 1)
 
 # Sur Linux natif, utilisez : API_URL="http://$(ip -4 addr show docker0 | grep -Po 'inet \K[\d.]+')"
-API_URL="http://host.docker.internal" # Port 80, géré par Caddy
+API_URL="https://host.docker.internal" # Port 443, géré par Caddy
 
 # --- Build de l'image ---
 echo "--- Construction de l'image Worker ($IMAGE_NAME) ---"
@@ -35,6 +35,7 @@ do
   docker run -d \
     --name $WORKER_NAME \
     -p $HOST_PORT:22 \
+    --add-host=host.docker.internal:host-gateway \
     -e MY_HOST_PORT=$HOST_PORT \
     -e API_ENDPOINT=$API_URL \
     $IMAGE_NAME
