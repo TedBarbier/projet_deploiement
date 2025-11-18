@@ -169,28 +169,39 @@ def get_user_by_id(conn, user_id):
 # -----------------------
 # Auth endpoints
 # -----------------------
-@app.route("/auth/signup", methods=["POST"])
+@app.route("/signup", methods=["POST"])
 def signup():
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
-    role = data.get("role", "user")
+    
     if not username or not password:
         return jsonify({"error": "username et password requis"}), 400
+
+    role = "user"  # on force toujours le rôle utilisateur pour la sécurité
+
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "DB non disponible"}), 500
+
     try:
         cur = conn.cursor()
-        # check existing
+        # Vérifier si l'utilisateur existe déjà
         cur.execute("SELECT id FROM users WHERE username=%s", (username,))
         if cur.fetchone():
-            return jsonify({"error": "Utilisateur deja existant"}), 400
-        # hash
+            return jsonify({"error": "Utilisateur déjà existant"}), 400
+
+        # Hachage du mot de passe
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        cur.execute("INSERT INTO users (username, password_hash, role) VALUES (%s,%s,%s)", (username, pw_hash, role))
+
+        # Insérer l'utilisateur avec le rôle forcé
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+            (username, pw_hash, role)
+        )
         conn.commit()
-        return jsonify({"message": "Compte cree"}), 201
+        return jsonify({"message": "Compte créé avec succès"}), 201
+
     except Exception as e:
         app.logger.error(f"Erreur signup: {e}")
         try:
@@ -202,7 +213,7 @@ def signup():
         cur.close()
         conn.close()
 
-@app.route("/auth/login", methods=["POST"])
+@app.route("/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
     username = data.get("username")
@@ -229,7 +240,7 @@ def login():
 # -----------------------
 # Core: rent multiple, release, extend, nodes
 # -----------------------
-@app.route("/api/rent", methods=["POST"])
+@app.route("/rent", methods=["POST"])
 @require_auth
 def rent_nodes():
     """
@@ -351,28 +362,28 @@ def rent_nodes():
         conn.close()
 
 
-@app.route("/api/release/<int:lease_id>", methods=["POST"])
+@app.route("/release/<int:rental_id>", methods=["POST"])
 @require_auth
-def release_lease(lease_id):
+def release_lease(rental_id):
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "DB non disponible"}), 500
     try:
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM leases WHERE id=%s FOR UPDATE", (lease_id,))
-        lease = cur.fetchone()
-        if not lease:
+        cur.execute("SELECT * FROM rentals WHERE id=%s FOR UPDATE", (rental_id,))
+        rental = cur.fetchone()
+        if not rental:
             conn.rollback()
             return jsonify({"error": "Lease introuvable"}), 404
 
         # permission check
-        if request.user["role"] != "admin" and lease["user_id"] != request.user["user_id"]:
+        if request.user["role"] != "admin" and rental["user_id"] != request.user["user_id"]:
             conn.rollback()
             return jsonify({"error": "Pas la permission de liberer cette location"}), 403
 
         # get node details
-        cur.execute("SELECT * FROM nodes WHERE id=%s FOR UPDATE", (lease["node_id"],))
+        cur.execute("SELECT * FROM nodes WHERE id=%s FOR UPDATE", (rental["node_id"],))
         node = cur.fetchone()
         if not node:
             conn.rollback()
@@ -380,12 +391,12 @@ def release_lease(lease_id):
 
         # Call ansible delete_user.yml to remove user on worker (best-effort)
         try:
-            run_ansible_provision('delete_user.yml', node["hostname"], node["ssh_port"], lease["client_name"], lease.get("ssh_password"))
+            run_ansible_provision('delete_user.yml', node["hostname"], node["ssh_port"], rental["client_name"], rental.get("ssh_password"))
         except Exception as e:
             app.logger.warning(f"Cleanup Ansible may have failed: {e}")
 
         # mark lease released and update node
-        cur.execute("UPDATE leases SET status=%s WHERE id=%s", ("released", lease_id))
+        cur.execute("UPDATE rentals SET status=%s WHERE id=%s", ("released", rental_id))
         cur.execute("UPDATE nodes SET allocated=false, allocated_to=NULL, lease_end_at=NULL WHERE id=%s", (node["id"],))
         conn.commit()
         return jsonify({"message": "Lease released"}), 200
@@ -403,9 +414,9 @@ def release_lease(lease_id):
             pass
         conn.close()
 
-@app.route("/api/extend/<int:lease_id>", methods=["POST"])
+@app.route("/extend/<int:rental_id>", methods=["POST"])
 @require_auth
-def extend_lease(lease_id):
+def extend_lease(rental_id):
     data = request.get_json() or {}
     try:
         add_hours = int(data.get("additional_hours", 0))
@@ -420,27 +431,27 @@ def extend_lease(lease_id):
     try:
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM leases WHERE id=%s FOR UPDATE", (lease_id,))
-        lease = cur.fetchone()
-        if not lease:
+        cur.execute("SELECT * FROM rentals WHERE id=%s FOR UPDATE", (rental_id,))
+        rental = cur.fetchone()
+        if not rental:
             conn.rollback()
             return jsonify({"error": "Lease introuvable"}), 404
 
         # permission check
-        if request.user["role"] != "admin" and lease["user_id"] != request.user["user_id"]:
+        if request.user["role"] != "admin" and rental["user_id"] != request.user["user_id"]:
             conn.rollback()
             return jsonify({"error": "Pas la permission d'etendre cette location"}), 403
 
-        if lease["status"] != "active":
+        if rental["status"] != "active":
             conn.rollback()
             return jsonify({"error": "La lease n'est pas active"}), 400
 
-        new_end = lease["end_at"] + timedelta(hours=add_hours)
-        cur.execute("UPDATE leases SET end_at=%s WHERE id=%s", (new_end, lease_id))
+        new_end = rental["end_at"] + timedelta(hours=add_hours)
+        cur.execute("UPDATE rentals SET end_at=%s WHERE id=%s", (new_end, rental_id))
         # mirror in nodes.lease_end_at if desired
-        cur.execute("UPDATE nodes SET lease_end_at=%s WHERE id=%s", (new_end, lease["node_id"]))
+        cur.execute("UPDATE nodes SET lease_end_at=%s WHERE id=%s", (new_end, rental["node_id"]))
         conn.commit()
-        return jsonify({"lease_id": lease_id, "new_end_at": new_end.isoformat()}), 200
+        return jsonify({"rental_id": rental_id, "new_end_at": new_end.isoformat()}), 200
     except Exception as e:
         app.logger.error(f"Erreur extend_lease: {e}")
         try:
@@ -455,7 +466,7 @@ def extend_lease(lease_id):
             pass
         conn.close()
 
-@app.route("/api/nodes", methods=["GET"])
+@app.route("/nodes", methods=["GET"])
 @require_auth
 def list_nodes():
     conn = get_db_connection()
@@ -516,7 +527,7 @@ def list_nodes():
     finally:
         conn.close()
 
-@app.route('/api/workers/register', methods=['POST'])
+@app.route('/workers/register', methods=['POST'])
 def register_worker():
     """
     Appelé par les agents 'agent.py' au démarrage.
@@ -566,14 +577,14 @@ def register_worker():
 # -----------------------
 # Health check for Caddy etc.
 # -----------------------
-@app.route('/api/health', methods=['GET'])
+@app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
 # -----------------------
 # Dev helper: reset DB nodes/leasing (kept for tests)
 # -----------------------
-@app.route('/api/reset', methods=['POST'])
+@app.route('/reset', methods=['POST'])
 @require_admin
 def reset_database():
     conn = get_db_connection()

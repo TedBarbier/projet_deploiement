@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Orion Dashboard</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 30px;
+        }
+        #dashboard { display: none; }
+        .node {
+            border: 1px solid #aaa;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        button {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Connexion</h2>
+<div id="login-box">
+    <label>Username:</label><br>
+    <input id="username" type="text"><br><br>
+
+    <label>Password:</label><br>
+    <input id="password" type="password"><br><br>
+
+    <button onclick="login()">Connexion</button>
+    <button onclick="window.location.href='register.html'">S'inscrire</button>
+    <p id="login-error" style="color:red;"></p>
+</div>
+
+<div id="dashboard">
+    <h2>Bienvenue <span id="user-name"></span></h2>
+    <button onclick="logout()">Déconnexion</button>
+    <hr>
+
+    <h3>Louer un node</h3>
+    Heures : <input type="number" id="rent-hours" value="1" min="1" />
+    Nombre : <input type="number" id="rent-count" value="1" min="1" />
+    <button onclick="rent()">Louer</button>
+
+    <hr>
+
+    <h3>Vos nodes</h3>
+    <div id="nodes"></div>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>

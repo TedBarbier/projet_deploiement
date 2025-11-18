@@ -3,4 +3,6 @@ python-dotenv
 schedule
 paramiko
 cffi
+passlib
+ansible
 ansible-runner

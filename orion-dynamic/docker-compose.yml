@@ -57,6 +57,14 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  web:
+    container_name: orion-web
+    build:
+      context: ./control-plane/web
+    restart: always
+    networks:
+      - lab_network
+
   proxy:
     image: caddy:2
     container_name: orion-proxy
@@ -65,6 +73,7 @@ services:
       - "443:443" # Pour les clients
     volumes:
       - ./control-plane/proxy/Caddyfile:/etc/caddy/Caddyfile
+      - ./control-plane/web:/srv/web
     networks:
       - lab_network
     depends_on:

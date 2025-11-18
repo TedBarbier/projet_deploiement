@@ -9,8 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Installer Ansible et ansible-runner
-RUN pip install --no-cache-dir ansible ansible-runner
+
 
 WORKDIR /app
 
@@ -28,5 +27,5 @@ COPY ./ansible /ansible
 RUN sed -i 's/\xc2\xa0/ /g' api.py
 
 # Lancer Gunicorn
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "debug", "api:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "api:app"]
 

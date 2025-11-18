@@ -2,6 +2,7 @@ flask
 gunicorn
 mysql-connector-python
 python-dotenv
+ansible
 ansible-runner
 passlib
 PyJWT

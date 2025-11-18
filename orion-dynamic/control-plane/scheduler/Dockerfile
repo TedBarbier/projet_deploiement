@@ -2,10 +2,11 @@ FROM python:3.10-slim
 
 # Installer les dépendances système pour Paramiko et Ansible
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libffi-dev \
-    libssl-dev \
+    gcc \
     sshpass \
+    openssh-client \
+    python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
