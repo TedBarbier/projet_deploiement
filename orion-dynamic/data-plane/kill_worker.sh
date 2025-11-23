@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- Configuration ---
-WORKER_NAME="worker-03"   # nom exact du container docker du worker
+WORKER_NAME="worker-02"   # nom exact du container docker du worker
 
 echo "[*] Crash test : arrêt du worker '$WORKER_NAME'..."
 

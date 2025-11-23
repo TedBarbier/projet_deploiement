@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     UNIQUE KEY uq_node_inventory (hostname, ip, ssh_port)
 );
 
+-- Index pour la table nodes
+CREATE INDEX idx_nodes_status ON nodes(status);
+CREATE INDEX idx_nodes_allocated ON nodes(allocated);
+
 -- ===========================
 --  TABLE DES UTILISATEURS
 -- ===========================
@@ -41,6 +45,7 @@ CREATE TABLE IF NOT EXISTS rentals (
     id INT AUTO_INCREMENT PRIMARY KEY,
 
     user_id INT NOT NULL,
+    ssh_password VARCHAR(255) NULL,
     node_id INT NOT NULL,
 
     leased_from TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -51,3 +56,8 @@ CREATE TABLE IF NOT EXISTS rentals (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
+
+-- Index pour la table rentals
+CREATE INDEX idx_rentals_user_id ON rentals(user_id);
+CREATE INDEX idx_rentals_node_id ON rentals(node_id);
+CREATE INDEX idx_rentals_leased_until_active ON rentals(leased_until, active);

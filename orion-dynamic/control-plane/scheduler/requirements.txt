@@ -6,3 +6,4 @@ cffi
 passlib
 ansible
 ansible-runner
+cryptography

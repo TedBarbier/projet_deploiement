@@ -26,6 +26,6 @@ COPY ./ansible /ansible
 # Nettoyer les espaces insécables
 RUN sed -i 's/\xc2\xa0/ /g' api.py
 
-# Lancer Gunicorn
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "api:app"]
+# Lancer Gunicorn avec des logs visibles dans la console
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "api:app", "--access-logfile", "-", "--error-logfile", "-"]
 

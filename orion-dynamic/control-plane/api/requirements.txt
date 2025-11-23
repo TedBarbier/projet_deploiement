@@ -1,4 +1,5 @@
 flask
+flask-limiter
 gunicorn
 mysql-connector-python
 python-dotenv
@@ -7,3 +8,5 @@ ansible-runner
 passlib
 PyJWT
 bcrypt
+cryptography
+marshmallow

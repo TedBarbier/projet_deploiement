@@ -9,6 +9,7 @@ import mysql.connector
 from mysql.connector import errorcode
 import ansible_runner
 from datetime import datetime
+from cryptography.fernet import Fernet
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='[SCHEDULER] %(asctime)s: %(message)s')
@@ -22,6 +23,24 @@ DB_NAME = os.getenv('DB_NAME')
 WORKER_SSH_USER = os.getenv('WORKER_SSH_USER', 'root')
 WORKER_SSH_PASS = os.getenv('WORKER_SSH_PASS', 'password')
 SSH_TIMEOUT = 5  # secondes
+
+# Clé de chiffrement (doit être la même que l'API)
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    logging.warning("ENCRYPTION_KEY non définie, génération d'une clé temporaire")
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+
+# --- Helper functions ---
+def decrypt_password(encrypted_password):
+    """Déchiffre un mot de passe."""
+    if not encrypted_password:
+        return None
+    try:
+        return cipher_suite.decrypt(encrypted_password.encode()).decode()
+    except Exception as e:
+        logging.error(f"Erreur déchiffrement: {e}")
+        return None
 
 # --- DB connection ---
 def get_db_connection():
@@ -129,23 +148,6 @@ def job_health_check():
             conn.close()
 
 # --- Migration des noeuds morts ---
-def migrate_user_to_new_node(conn, old_node_id, new_node_id):
-    """Déplace un utilisateur d'un nœud mort vers un nœud sain en conservant la location."""
-    cursor = conn.cursor(dictionary=True)
-    # Récupérer le rental actif du nœud mort
-    cursor.execute("SELECT id, user_id, leased_from, leased_until FROM rentals WHERE node_id=%s AND active=TRUE", (old_node_id,))
-    rental = cursor.fetchone()
-    if not rental:
-        return None  # Pas de location active
-
-    # Mettre à jour le rental pour pointer vers le nouveau nœud
-    cursor.execute(
-        "UPDATE rentals SET node_id=%s WHERE id=%s",
-        (new_node_id, rental['id'])
-    )
-    return rental['user_id']
-
-
 def job_migrate_dead_nodes():
     logging.info("[Tâche 2] Vérification des migrations...")
     conn = get_db_connection()
@@ -172,28 +174,47 @@ def job_migrate_dead_nodes():
                 conn.rollback()
                 continue
 
-            # Migrer l'utilisateur vers le nouveau nœud
-            user_id = migrate_user_to_new_node(conn, node['id'], new_node['id'])
-            if not user_id:
+            # Récupérer le rental avec le username ET le password chiffré
+            cursor.execute("""
+                SELECT r.*, u.username 
+                FROM rentals r 
+                JOIN users u ON r.user_id = u.id 
+                WHERE r.node_id = %s AND r.active = TRUE
+            """, (node['id'],))
+            rental = cursor.fetchone()
+            
+            if not rental:
                 logging.error(f"[Tâche 2] Pas de rental actif pour {node['id']}")
                 conn.rollback()
                 continue
 
-            client_user = f"user_{user_id}"
+            client_user = rental['username']
             ip_to_use = resolve_worker_ip(new_node['ip'])
 
-            # Créer l'utilisateur sur le nouveau nœud
-            success = run_ansible_task('create_user.yml', ip_to_use, new_node['ssh_port'], client_user, WORKER_SSH_PASS)
+            # Déchiffrer le password
+            client_pass = decrypt_password(rental.get('ssh_password'))
+            if not client_pass:
+                logging.error(f"[Tâche 2] Impossible de récupérer le password pour {client_user}")
+                conn.rollback()
+                continue
+
+            # Créer l'utilisateur sur le nouveau nœud avec le même password
+            success = run_ansible_task('create_user.yml', ip_to_use, new_node['ssh_port'], 
+                                      client_user, client_pass)
             if not success:
                 logging.error(f"[Tâche 2] Échec Ansible pour migration vers {new_node['id']}")
                 conn.rollback()
                 continue
 
+            # Mettre à jour le rental pour pointer vers le nouveau nœud
+            cursor.execute("UPDATE rentals SET node_id = %s WHERE id = %s", 
+                          (new_node['id'], rental['id']))
+            
             # Libérer l'ancien nœud
             cursor.execute("UPDATE nodes SET allocated=FALSE WHERE id=%s", (node['id'],))
             cursor.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (new_node['id'],))
             conn.commit()
-            logging.info(f"[Tâche 2] Migration réussie: {client_user} -> {new_node['id']}")
+            logging.info(f"[Tâche 2] Migration réussie: {client_user} -> nœud {new_node['id']}")
 
     except Exception as e:
         logging.error(f"[Tâche 2] Erreur migration: {e}")
@@ -202,6 +223,8 @@ def job_migrate_dead_nodes():
     finally:
         if conn and conn.is_connected():
             conn.close()
+
+
 # --- Expiration des baux ---
 def job_expire_leases():
     logging.info("[Tâche 3] Vérification des baux expirés...")
@@ -212,25 +235,39 @@ def job_expire_leases():
         conn.start_transaction()
         cursor = conn.cursor(dictionary=True)
         sql = """
-        SELECT n.id AS node_id, n.ip, n.ssh_port, r.id AS rental_id, r.user_id
+        SELECT n.id AS node_id, n.ip, n.ssh_port, r.id AS rental_id, r.user_id, u.username, r.ssh_password
         FROM nodes n
         JOIN rentals r ON r.node_id = n.id
+        JOIN users u ON r.user_id = u.id
         WHERE n.allocated=TRUE AND r.active=TRUE AND r.leased_until <= NOW()
         FOR UPDATE
         """
         cursor.execute(sql)
         expired = cursor.fetchall()
+        logging.info(f"[Tâche 3] Baux expirés trouvés : {len(expired)}")
         for row in expired:
-            client_user = f"user_{row['user_id']}"
+            client_user = row['username']
             ip_to_use = resolve_worker_ip(row['ip'])
             logging.info(f"[Tâche 3] Expiration de {client_user} sur noeud {row['node_id']}...")
-            success = run_ansible_task('delete_user.yml', ip_to_use, row['ssh_port'], client_user)
+
+            # Déchiffrer le password pour le cleanup
+            client_pass = decrypt_password(row.get('ssh_password'))
+
+            success = run_ansible_task('delete_user.yml', ip_to_use, row['ssh_port'], 
+                                      client_user, client_pass or "")
             if success:
-                cursor.execute("UPDATE nodes SET allocated=FALSE, allocated_to=NULL WHERE id=%s", (row['node_id'],))
-                cursor.execute("UPDATE rentals SET active=FALSE WHERE id=%s", (row['rental_id'],))
-                logging.info(f"[Tâche 3] Noeud {row['node_id']} libéré et rental {row['rental_id']} clos.")
+                try:
+                    cursor.execute("UPDATE nodes SET allocated=FALSE WHERE id=%s", (row['node_id'],))
+                    cursor.execute("UPDATE rentals SET active=FALSE WHERE id=%s", (row['rental_id'],))
+                    logging.info(f"[Tâche 3] Noeud {row['node_id']} libéré et rental {row['rental_id']} clos.")
+                except Exception as e:
+                    logging.error(f"[Tâche 3] Erreur mise à jour DB pour rental {row['rental_id']}: {e}")
+                    conn.rollback()
+                    continue
             else:
                 logging.error(f"[Tâche 3] Échec nettoyage Ansible pour noeud {row['node_id']}")
+                conn.rollback()
+                continue
         conn.commit()
     except Exception as e:
         logging.error(f"[Tâche 3] Erreur expiration: {e}")
@@ -253,17 +290,23 @@ def job_cleanup_resurrected_nodes():
         nodes = cursor.fetchall()
         for node in nodes:
             # Chercher les rentals actifs qui ont été déplacés depuis ce nœud
-            cursor.execute(
-                "SELECT user_id FROM rentals WHERE node_id=%s AND active=TRUE",
-                (node['id'],)
-            )
+            cursor.execute("""
+                SELECT r.user_id, u.username, r.ssh_password
+                FROM rentals r
+                JOIN users u ON r.user_id = u.id
+                WHERE r.node_id=%s AND r.active=TRUE
+            """, (node['id'],))
             rentals = cursor.fetchall()
             for rental in rentals:
-                client_user = f"user_{rental['user_id']}"
+                client_user = rental['username']
                 ip_to_use = resolve_worker_ip(node['ip'])
                 
+                # Déchiffrer le password
+                client_pass = decrypt_password(rental.get('ssh_password'))
+                
                 # Supprimer l'utilisateur du nœud ressuscité
-                success = run_ansible_task('delete_user.yml', ip_to_use, node['ssh_port'], client_user)
+                success = run_ansible_task('delete_user.yml', ip_to_use, node['ssh_port'], 
+                                          client_user, client_pass or "")
                 if success:
                     logging.info(f"[Tâche 4] Utilisateur {client_user} supprimé du nœud {node['id']}")
                 else:

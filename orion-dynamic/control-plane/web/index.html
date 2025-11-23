@@ -31,7 +31,7 @@
     <input id="password" type="password"><br><br>
 
     <button onclick="login()">Connexion</button>
-    <button onclick="window.location.href='register.html'">S'inscrire</button>
+    <button onclick="showRegister()">S'inscrire</button>
     <p id="login-error" style="color:red;"></p>
 </div>
 
@@ -42,8 +42,12 @@
 
     <h3>Louer un node</h3>
     Heures : <input type="number" id="rent-hours" value="1" min="1" />
-    Nombre : <input type="number" id="rent-count" value="1" min="1" />
+    Nombre : <input type="number" id="rent-count" value="1" min="1" /><br><br>
+    Mot de passe SSH (optionnel) : <input type="text" id="rent-password" placeholder="Laissez vide pour génération auto" /><br>
+    <small style="color: gray;">Si vide, un mot de passe aléatoire sera généré automatiquement</small><br><br>
     <button onclick="rent()">Louer</button>
+
+    <button style="margin-left: 10px; background-color: #ffcccb;" onclick="rentSpecialLease()">Bail spécial (2 minutes)</button>
 
     <hr>
 
@@ -52,7 +56,91 @@
 
 </div>
 
+<div id="register-box" style="display: none;">
+        <h2>Créer un compte</h2>
+
+        <label>Nom d'utilisateur:</label><br>
+        <input id="register-username" type="text"><br><br>
+
+        <label>Mot de passe:</label><br>
+        <input id="register-password" type="password"><br><br>
+
+        <button onclick="register()">S'inscrire</button>
+        <button onclick="showLogin()">Se connecter</button>
+
+        <p id="register-result" style="color:red;"></p>
+    </div>
+
+<div id="extend-container" style="display: none;">
+  <label for="extend-time">Temps d'extension (en minutes) :</label>
+  <input type="number" id="extend-time" name="extend-time" min="1" placeholder="Entrez le temps">
+  <button id="confirm-extend-button">Confirmer</button>
+</div>
+
+<script>
+  document.getElementById("extend-button").addEventListener("click", () => {
+    const extendContainer = document.getElementById("extend-container");
+    extendContainer.style.display = extendContainer.style.display === "none" ? "block" : "none";
+  });
+
+  document.getElementById("confirm-extend-button").addEventListener("click", () => {
+    const additionalHours = parseFloat(document.getElementById("extend-time").value);
+    if (!isNaN(additionalHours) && additionalHours > 0) {
+      extend(selectedNodeId, additionalHours);
+    } else {
+      alert("Veuillez entrer un temps valide en heures.");
+    }
+  });
+
+  function showExtendForm(nodeId) {
+    const extendContainer = document.getElementById("extend-container");
+    extendContainer.style.display = "block";
+    document.getElementById("confirm-extend-button").onclick = () => {
+      const additionalHours = parseFloat(document.getElementById("extend-time").value);
+      if (!isNaN(additionalHours) && additionalHours > 0) {
+        extend(nodeId, additionalHours);
+      } else {
+        alert("Veuillez entrer un temps valide en heures.");
+      }
+    };
+  }
+</script>
+
+<script>
+function rentSpecialLease() {
+    console.log("Envoi de la requête pour un bail spécial de test");
+
+    api("/api/rent/test", "POST", {}).then(res => {
+        if (res.error) {
+            console.error("Erreur reçue du serveur :", res);
+            alert("Erreur: " + res.error);
+        } else {
+            console.log("Réponse du serveur :", res);
+
+            // Conversion de l'heure UTC en heure locale
+            const leasedUntil = new Date(res.leased_until);
+            const localTime = leasedUntil.toLocaleString('fr-FR', {
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
+            });
+
+            alert(`Bail spécial de 2 minutes créé avec succès !\nJusqu'à (heure locale) : ${localTime}`);
+            loadNodes();
+        }
+    }).catch(error => {
+        console.error("Erreur lors de l'appel API :", error);
+        alert("Une erreur est survenue lors de la création du bail spécial.");
+    });
+}
+</script>
+
 <script src="app.js"></script>
+<link rel="stylesheet" href="styles.css">
 
 </body>
 </html>

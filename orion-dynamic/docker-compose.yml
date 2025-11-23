@@ -57,14 +57,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  web:
-    container_name: orion-web
-    build:
-      context: ./control-plane/web
-    restart: always
-    networks:
-      - lab_network
-
   proxy:
     image: caddy:2
     container_name: orion-proxy

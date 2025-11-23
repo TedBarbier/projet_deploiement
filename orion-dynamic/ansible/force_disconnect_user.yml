@@ -1,0 +1,64 @@
+---
+- name: Force disconnect and remove user (aggressive)
+  hosts: all
+  become: yes
+  gather_facts: no
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  tasks:
+    - name: Get all PIDs for the user
+      ansible.builtin.shell: |
+        ps -u {{ target_user }} -o pid= 2>/dev/null || echo ""
+      register: user_pids
+      ignore_errors: yes
+
+    - name: Display user PIDs
+      ansible.builtin.debug:
+        msg: "User {{ target_user }} has PIDs: {{ user_pids.stdout_lines }}"
+      when: user_pids.stdout != ""
+
+    - name: Kill all user processes with SIGTERM first
+      ansible.builtin.shell: |
+        pkill -TERM -u {{ target_user }} 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Wait for graceful shutdown
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Force kill remaining processes with SIGKILL
+      ansible.builtin.shell: |
+        pkill -9 -u {{ target_user }} 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Kill SSH daemon processes for this user
+      ansible.builtin.shell: |
+        # Trouver et tuer les processus sshd de l'utilisateur
+        for pid in $(ps aux | grep "sshd:.*{{ target_user }}" | grep -v grep | awk '{print $2}'); do
+          kill -9 $pid 2>/dev/null || true
+        done
+      ignore_errors: yes
+
+    - name: Verify no processes remain
+      ansible.builtin.shell: |
+        ps -u {{ target_user }} 2>/dev/null | wc -l
+      register: remaining_procs
+      ignore_errors: yes
+
+    - name: Log remaining processes
+      ansible.builtin.debug:
+        msg: "Remaining processes for {{ target_user }}: {{ remaining_procs.stdout }}"
+
+    - name: Remove user with force
+      ansible.builtin.user:
+        name: "{{ target_user }}"
+        state: absent
+        remove: yes
+        force: yes
+
+    - name: Clean up any remaining user files
+      ansible.builtin.file:
+        path: "/home/{{ target_user }}"
+        state: absent
+      ignore_errors: yes

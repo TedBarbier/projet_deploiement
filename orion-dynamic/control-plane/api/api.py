@@ -12,6 +12,10 @@ import mysql.connector
 from mysql.connector import errorcode
 import ansible_runner
 from functools import wraps
+from cryptography.fernet import Fernet
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from marshmallow import Schema, fields, ValidationError
 
 # -----------------------
 # Logging & Flask
@@ -34,6 +38,28 @@ WORKER_SSH_PASS = os.getenv('WORKER_SSH_PASS', 'password')
 
 JWT_SECRET = os.getenv('JWT_SECRET', 'change_me_in_prod')
 JWT_EXPIRE_SECONDS = int(os.getenv('JWT_EXPIRE_SECONDS', '3600'))  # 1h default
+
+# Clé de chiffrement pour les passwords SSH
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    app.logger.warning("ENCRYPTION_KEY non définie, génération d'une clé temporaire (ne pas utiliser en prod !)")
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+
+# -----------------------
+# Password encryption helpers
+# -----------------------
+def encrypt_password(password):
+    """Chiffre un mot de passe."""
+    if not password:
+        return None
+    return cipher_suite.encrypt(password.encode()).decode()
+
+def decrypt_password(encrypted_password):
+    """Déchiffre un mot de passe."""
+    if not encrypted_password:
+        return None
+    return cipher_suite.decrypt(encrypted_password.encode()).decode()
 
 # -----------------------
 # DB helper
@@ -167,16 +193,32 @@ def get_user_by_id(conn, user_id):
     return user
 
 # -----------------------
-# Auth endpoints
+# Schemas de validation
+# -----------------------
+class SignupSchema(Schema):
+    username = fields.Str(required=True, validate=lambda x: len(x) >= 3)
+    password = fields.Str(required=True, validate=lambda x: len(x) >= 6)
+
+class LoginSchema(Schema):
+    username = fields.Str(required=True)
+    password = fields.Str(required=True)
+
+signup_schema = SignupSchema()
+login_schema = LoginSchema()
+
+# -----------------------
+# Auth endpoints avec validation
 # -----------------------
 @app.route("/signup", methods=["POST"])
 def signup():
     data = request.get_json() or {}
-    username = data.get("username")
-    password = data.get("password")
-    
-    if not username or not password:
-        return jsonify({"error": "username et password requis"}), 400
+    try:
+        validated_data = signup_schema.load(data)
+    except ValidationError as err:
+        return jsonify({"error": err.messages}), 400
+
+    username = validated_data["username"]
+    password = validated_data["password"]
 
     role = "user"  # on force toujours le rôle utilisateur pour la sécurité
 
@@ -216,10 +258,14 @@ def signup():
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
-    username = data.get("username")
-    password = data.get("password")
-    if not username or not password:
-        return jsonify({"error": "username et password requis"}), 400
+    try:
+        validated_data = login_schema.load(data)
+    except ValidationError as err:
+        return jsonify({"error": err.messages}), 400
+
+    username = validated_data["username"]
+    password = validated_data["password"]
+
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "DB non disponible"}), 500
@@ -312,12 +358,15 @@ def rent_nodes():
 
             client_pass = ssh_password_given or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
 
-            # Insert rental
+            # Chiffrer le mot de passe avant stockage
+            encrypted_pass = encrypt_password(client_pass)
+
+            # Insert rental avec password chiffré
             insert_rental = """
-                INSERT INTO rentals (node_id, user_id, leased_from, leased_until, active)
-                VALUES (%s, %s, %s, %s, TRUE)
+                INSERT INTO rentals (node_id, user_id, leased_from, leased_until, active, ssh_password)
+                VALUES (%s, %s, %s, %s, TRUE, %s)
             """
-            cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end))
+            cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end, encrypted_pass))
             cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
             rental_id = cur.lastrowid
 
@@ -371,35 +420,65 @@ def release_lease(rental_id):
     try:
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT * FROM rentals WHERE id=%s FOR UPDATE", (rental_id,))
+        
+        # 1. Récupérer le rental avec les infos du user
+        cur.execute("""
+            SELECT r.*, u.username, n.ip, n.hostname, n.ssh_port
+            FROM rentals r
+            JOIN users u ON r.user_id = u.id
+            JOIN nodes n ON r.node_id = n.id
+            WHERE r.id = %s
+            FOR UPDATE
+        """, (rental_id,))
         rental = cur.fetchone()
+        
         if not rental:
             conn.rollback()
             return jsonify({"error": "Lease introuvable"}), 404
 
-        # permission check
+        # 2. Vérifier les permissions
         if request.user["role"] != "admin" and rental["user_id"] != request.user["user_id"]:
             conn.rollback()
-            return jsonify({"error": "Pas la permission de liberer cette location"}), 403
+            return jsonify({"error": "Pas la permission"}), 403
 
-        # get node details
-        cur.execute("SELECT * FROM nodes WHERE id=%s FOR UPDATE", (rental["node_id"],))
-        node = cur.fetchone()
-        if not node:
+        # 3. Vérifier que le rental est encore actif
+        if not rental["active"]:
             conn.rollback()
-            return jsonify({"error": "Noeud introuvable"}), 404
+            return jsonify({"error": "Ce bail est déjà libéré"}), 400
 
-        # Call ansible delete_user.yml to remove user on worker (best-effort)
+        # 4. Déprovisionner via Ansible (best-effort)
+        client_user = rental["username"]  # Le username du user
+        host_ip = rental["ip"]
+        if host_ip.startswith("172.17."):
+            host_ip = "host.docker.internal"
+        
+        # Déchiffrer le password pour le cleanup (si stocké)
+        client_pass = ""
+        if rental.get("ssh_password"):
+            try:
+                client_pass = decrypt_password(rental["ssh_password"])
+            except Exception as e:
+                app.logger.warning(f"Impossible de déchiffrer le password: {e}")
+        
+        # Supprimer l'utilisateur via Ansible
         try:
-            run_ansible_provision('delete_user.yml', node["hostname"], node["ssh_port"], rental["client_name"], rental.get("ssh_password"))
+            run_ansible_provision(
+                'delete_user.yml', 
+                host_ip, 
+                rental["ssh_port"], 
+                client_user, 
+                client_pass  # Password déchiffré (ou vide si non disponible)
+            )
         except Exception as e:
-            app.logger.warning(f"Cleanup Ansible may have failed: {e}")
+            app.logger.warning(f"Cleanup Ansible a échoué (non bloquant): {e}")
 
-        # mark lease released and update node
-        cur.execute("UPDATE rentals SET status=%s WHERE id=%s", ("released", rental_id))
-        cur.execute("UPDATE nodes SET allocated=false, allocated_to=NULL, lease_end_at=NULL WHERE id=%s", (node["id"],))
+        # 5. Désactiver le rental et libérer le nœud
+        cur.execute("UPDATE rentals SET active = FALSE WHERE id = %s", (rental_id,))
+        cur.execute("UPDATE nodes SET allocated = FALSE WHERE id = %s", (rental["node_id"],))
+        
         conn.commit()
-        return jsonify({"message": "Lease released"}), 200
+        return jsonify({"message": "Lease libérée avec succès"}), 200
+        
     except Exception as e:
         app.logger.error(f"Erreur release_lease: {e}")
         try:
@@ -431,27 +510,38 @@ def extend_lease(rental_id):
     try:
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
+        
+        # 1. Récupérer le rental
         cur.execute("SELECT * FROM rentals WHERE id=%s FOR UPDATE", (rental_id,))
         rental = cur.fetchone()
+        
         if not rental:
             conn.rollback()
             return jsonify({"error": "Lease introuvable"}), 404
 
-        # permission check
+        # 2. Vérifier les permissions
         if request.user["role"] != "admin" and rental["user_id"] != request.user["user_id"]:
             conn.rollback()
-            return jsonify({"error": "Pas la permission d'etendre cette location"}), 403
+            return jsonify({"error": "Pas la permission"}), 403
 
-        if rental["status"] != "active":
+        # 3. Vérifier que le rental est actif
+        if not rental["active"]:
             conn.rollback()
-            return jsonify({"error": "La lease n'est pas active"}), 400
+            return jsonify({"error": "Ce bail n'est pas actif"}), 400
 
-        new_end = rental["end_at"] + timedelta(hours=add_hours)
-        cur.execute("UPDATE rentals SET end_at=%s WHERE id=%s", (new_end, rental_id))
-        # mirror in nodes.lease_end_at if desired
-        cur.execute("UPDATE nodes SET lease_end_at=%s WHERE id=%s", (new_end, rental["node_id"]))
+        # 4. Calculer la nouvelle date de fin
+        new_end = rental["leased_until"] + timedelta(hours=add_hours)
+        
+        # 5. Mettre à jour
+        cur.execute("UPDATE rentals SET leased_until = %s WHERE id = %s", (new_end, rental_id))
+        
         conn.commit()
-        return jsonify({"rental_id": rental_id, "new_end_at": new_end.isoformat()}), 200
+        return jsonify({
+            "message": "Bail prolongé avec succès",
+            "rental_id": rental_id, 
+            "new_leased_until": new_end.isoformat()
+        }), 200
+        
     except Exception as e:
         app.logger.error(f"Erreur extend_lease: {e}")
         try:
@@ -516,7 +606,7 @@ def list_nodes():
                     "user_id": r["rental_user_id"],
                     "leased_from": r["leased_from"].isoformat() if r["leased_from"] else None,
                     "leased_until": r["leased_until"].isoformat() if r["leased_until"] else None,
-                    "active": bool(r["active"])
+                    "active": bool(r["active"]),
                 }
 
         return jsonify(list(nodes.values())), 200
@@ -573,6 +663,54 @@ def register_worker():
         if conn and conn.is_connected():
             conn.close()
 
+@app.route('/lease/<int:rental_id>/password', methods=['GET'])
+@require_auth
+def get_ssh_password(rental_id):
+
+    # Récupérer l'utilisateur actuel
+    current_user = request.user["user_id"]
+
+    conn = get_db_connection()
+    if not conn:
+        app.logger.error("Connexion à la base de données impossible")
+        return jsonify({"error": "DB non disponible"}), 500
+
+    # Rechercher le lease correspondant dans la base de données
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT r.*, u.username, n.ip, n.hostname, n.ssh_port
+            FROM rentals r
+            JOIN users u ON r.user_id = u.id
+            JOIN nodes n ON r.node_id = n.id
+            WHERE r.id = %s
+        """, (rental_id,))
+        rental = cur.fetchone()
+        cur.close()
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération du lease: {e}")
+        return jsonify({"error": "Erreur serveur interne"}), 500
+
+    if not rental:
+        app.logger.warning(f"Lease introuvable pour rental_id: {rental_id}")
+        return jsonify({"error": "Lease introuvable."}), 404
+
+    # Vérifier si l'utilisateur est autorisé à accéder à ce lease
+    if rental["user_id"] != current_user:
+        app.logger.warning(f"Accès non autorisé pour l'utilisateur {current_user} sur rental_id: {rental_id}")
+        return jsonify({"error": "Accès non autorisé."}), 403
+
+    # Retourner le mot de passe SSH
+    ssh_password = rental.get("ssh_password")
+    if ssh_password:
+        try:
+            ssh_password = decrypt_password(ssh_password)
+        except Exception as e:
+            app.logger.warning(f"Impossible de déchiffrer le mot de passe SSH: {e}")
+            ssh_password = None
+
+    return jsonify({"ssh_password": ssh_password}), 200
+
 
 # -----------------------
 # Health check for Caddy etc.
@@ -611,6 +749,105 @@ def reset_database():
 # -----------------------
 # Startup main
 # -----------------------
+
 if __name__ == "__main__":
     app.logger.info("--- Demarrage du serveur Flask en mode DEBUG ---")
     app.run(host='0.0.0.0', port=8080, debug=True)
+
+@app.route("/rent/test", methods=["POST"])
+@require_auth
+def rent_test_node():
+    """
+    Endpoint pour tester la location d'un nœud pour 2 minutes.
+    """
+    import secrets, string
+    from datetime import datetime, timedelta
+
+    client_name = request.user["username"]
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB non disponible"}), 500
+
+    try:
+        conn.start_transaction()
+        cur = conn.cursor(dictionary=True)
+
+        # Récupérer un seul nœud libre
+        cur.execute("""
+            SELECT * FROM nodes
+            WHERE status='alive' AND allocated=FALSE
+            ORDER BY last_checked DESC
+            LIMIT 1
+            FOR UPDATE
+        """)
+        node = cur.fetchone()
+
+        if not node:
+            conn.rollback()
+            return jsonify({"error": "Pas de nœud libre disponible"}), 503
+
+        now = datetime.utcnow()
+        lease_end = now + timedelta(minutes=2)
+
+        node_id = node["id"]
+        host_ip = node["ip"]
+        port = node["ssh_port"]
+
+        # Exception Docker : remplacer l'IP par host.docker.internal si IP interne Docker
+        if host_ip.startswith("172.17."):
+            host_ip = "host.docker.internal"
+
+        client_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+
+        # Chiffrer le mot de passe avant stockage
+        encrypted_pass = encrypt_password(client_pass)
+
+        # Insert rental avec password chiffré
+        insert_rental = """
+            INSERT INTO rentals (node_id, user_id, leased_from, leased_until, active, ssh_password)
+            VALUES (%s, %s, %s, %s, TRUE, %s)
+        """
+        cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end, encrypted_pass))
+        cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
+        rental_id = cur.lastrowid
+
+        # Provisioning
+        success = run_ansible_provision(
+            playbook_name='create_user.yml',
+            host_ip=host_ip,
+            host_port=port,
+            client_user=client_name,
+            client_pass=client_pass
+        )
+
+        if not success:
+            app.logger.error(f"Provisioning failed for node {node_id}, rolling back transaction")
+            conn.rollback()
+            return jsonify({"error": "Échec du provisioning; transaction annulée"}), 500
+
+        conn.commit()
+        return jsonify({
+            "rental_id": rental_id,
+            "host_ip": host_ip,
+            "ssh_port": port,
+            "client_user": client_name,
+            "client_pass": client_pass,
+            "leased_until": lease_end.isoformat(),
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Erreur interne rent_test_node: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
+        return jsonify({"error": "Erreur serveur interne"}), 500
+    finally:
+        try:
+            cur.close()
+        except:
+            pass
+        conn.close()
+
+
