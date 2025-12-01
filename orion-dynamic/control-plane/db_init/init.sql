@@ -19,12 +19,16 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Alloué ou non (sera utilisé comme "lock" rapide)
     allocated BOOLEAN NOT NULL DEFAULT FALSE,
 
+    -- Géré par un scheduler
+    scheduler_id INT,
+
     UNIQUE KEY uq_node_inventory (hostname, ip, ssh_port)
 );
 
 -- Index pour la table nodes
 CREATE INDEX idx_nodes_status ON nodes(status);
 CREATE INDEX idx_nodes_allocated ON nodes(allocated);
+CREATE INDEX idx_nodes_scheduler_id ON nodes(scheduler_id);
 
 -- ===========================
 --  TABLE DES UTILISATEURS
@@ -61,3 +65,12 @@ CREATE TABLE IF NOT EXISTS rentals (
 CREATE INDEX idx_rentals_user_id ON rentals(user_id);
 CREATE INDEX idx_rentals_node_id ON rentals(node_id);
 CREATE INDEX idx_rentals_leased_until_active ON rentals(leased_until, active);
+
+-- ===========================
+--  TABLE DES SCHEDULERS
+-- ===========================
+CREATE TABLE IF NOT EXISTS scheduler_ranges (
+    scheduler_id INT AUTO_INCREMENT PRIMARY KEY,
+    start_id INT NOT NULL,
+    end_id INT NOT NULL
+);

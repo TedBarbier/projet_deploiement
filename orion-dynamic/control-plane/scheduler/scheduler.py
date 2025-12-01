@@ -123,6 +123,7 @@ def check_node_health(ip, port):
         if client:
             client.close()
 
+# Mise à jour pour ne vérifier que les nœuds du scheduler actuel
 def job_health_check():
     logging.info("[Tâche 1] Exécution du Health Check...")
     conn = get_db_connection()
@@ -130,8 +131,17 @@ def job_health_check():
         return
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id, ip, ssh_port FROM nodes")
+
+        # Récupérer l'ID du scheduler actuel (par exemple, via une variable d'environnement)
+        scheduler_id = int(os.getenv('SCHEDULER_ID', 1))
+
+        # Sélectionner uniquement les nœuds gérés par ce scheduler
+        cursor.execute(
+            "SELECT id, ip, ssh_port FROM nodes WHERE scheduler_id = %s",
+            (scheduler_id,)
+        )
         nodes = cursor.fetchall()
+
         update_cursor = conn.cursor()
         for node in nodes:
             ip_to_use = resolve_worker_ip(node['ip'])
@@ -140,14 +150,14 @@ def job_health_check():
                 "UPDATE nodes SET status=%s, last_checked=%s WHERE id=%s",
                 (status, datetime.now(), node['id'])
             )
-        logging.info(f"[Tâche 1] Health Check terminé. {len(nodes)} noeuds vérifiés.")
+        logging.info(f"[Tâche 1] Health Check terminé. {len(nodes)} nœuds vérifiés pour le scheduler {scheduler_id}.")
     except Exception as e:
         logging.error(f"[Tâche 1] Erreur Health Check: {e}")
     finally:
         if conn and conn.is_connected():
             conn.close()
 
-# --- Migration des noeuds morts ---
+# Mise à jour pour la migration des nœuds morts
 def job_migrate_dead_nodes():
     logging.info("[Tâche 2] Vérification des migrations...")
     conn = get_db_connection()
@@ -156,68 +166,26 @@ def job_migrate_dead_nodes():
     try:
         conn.start_transaction()
         cursor = conn.cursor(dictionary=True)
-        # Sélectionner tous les nœuds morts et alloués
-        cursor.execute("SELECT * FROM nodes WHERE status='dead' AND allocated=TRUE FOR UPDATE")
+
+        # Récupérer l'ID du scheduler actuel
+        scheduler_id = int(os.getenv('SCHEDULER_ID', 1))
+
+        # Sélectionner uniquement les nœuds morts gérés par ce scheduler
+        cursor.execute(
+            "SELECT id FROM nodes WHERE status='dead' AND allocated=TRUE AND scheduler_id=%s FOR UPDATE",
+            (scheduler_id,)
+        )
         dead_nodes = cursor.fetchall()
         if not dead_nodes:
             conn.rollback()
             return
 
         for node in dead_nodes:
-            logging.info(f"[Tâche 2] Migration pour noeud {node['id']}...")
-
-            # Chercher un nœud sain et libre
-            cursor.execute("SELECT id, ip, ssh_port FROM nodes WHERE status='alive' AND allocated=FALSE LIMIT 1 FOR UPDATE")
-            new_node = cursor.fetchone()
-            if not new_node:
-                logging.error(f"[Tâche 2] Aucun noeud sain disponible pour migration de {node['id']}")
-                conn.rollback()
-                continue
-
-            # Récupérer le rental avec le username ET le password chiffré
-            cursor.execute("""
-                SELECT r.*, u.username 
-                FROM rentals r 
-                JOIN users u ON r.user_id = u.id 
-                WHERE r.node_id = %s AND r.active = TRUE
-            """, (node['id'],))
-            rental = cursor.fetchone()
-            
-            if not rental:
-                logging.error(f"[Tâche 2] Pas de rental actif pour {node['id']}")
-                conn.rollback()
-                continue
-
-            client_user = rental['username']
-            ip_to_use = resolve_worker_ip(new_node['ip'])
-
-            # Déchiffrer le password
-            client_pass = decrypt_password(rental.get('ssh_password'))
-            if not client_pass:
-                logging.error(f"[Tâche 2] Impossible de récupérer le password pour {client_user}")
-                conn.rollback()
-                continue
-
-            # Créer l'utilisateur sur le nouveau nœud avec le même password
-            success = run_ansible_task('create_user.yml', ip_to_use, new_node['ssh_port'], 
-                                      client_user, client_pass)
-            if not success:
-                logging.error(f"[Tâche 2] Échec Ansible pour migration vers {new_node['id']}")
-                conn.rollback()
-                continue
-
-            # Mettre à jour le rental pour pointer vers le nouveau nœud
-            cursor.execute("UPDATE rentals SET node_id = %s WHERE id = %s", 
-                          (new_node['id'], rental['id']))
-            
-            # Libérer l'ancien nœud
-            cursor.execute("UPDATE nodes SET allocated=FALSE WHERE id=%s", (node['id'],))
-            cursor.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (new_node['id'],))
-            conn.commit()
-            logging.info(f"[Tâche 2] Migration réussie: {client_user} -> nœud {new_node['id']}")
+            logging.info(f"[Tâche 2] Réattribution pour le nœud {node['id']}...")
+            reassign_rental_on_node_failure(node['id'])
 
     except Exception as e:
-        logging.error(f"[Tâche 2] Erreur migration: {e}")
+        logging.error(f"[Tâche 2] Erreur migration : {e}")
         if conn:
             conn.rollback()
     finally:

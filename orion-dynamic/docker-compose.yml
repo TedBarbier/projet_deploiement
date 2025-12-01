@@ -34,8 +34,37 @@ services:
     environment:
       - DB
 
+  api-2:
+    container_name: orion-api-2
+    build:
+      context: .
+      dockerfile: ./control-plane/api/Dockerfile
+    restart: always
+    depends_on:
+      db: 
+        condition: service_healthy
+    networks:
+      - lab_network
+    environment:
+      - DB
+
+  api-3:
+    container_name: orion-api-3
+    build:
+      context: .
+      dockerfile: ./control-plane/api/Dockerfile
+    restart: always
+    depends_on:
+      db: 
+        condition: service_healthy
+    networks:
+      - lab_network
+    environment:
+      - DB
+
+
   scheduler:
-    container_name: orion-scheduler
+    container_name: orion-scheduler-${SCHEDULER_ID}
     build:
       context: .
       dockerfile: ./control-plane/scheduler/Dockerfile
@@ -50,9 +79,9 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
-      # Identifiants SSH pour Paramiko (health check) et Ansible (cleanup)
       - WORKER_SSH_USER=root
       - WORKER_SSH_PASS=password
+      - SCHEDULER_ID=${SCHEDULER_ID}  # ID dynamique pour chaque scheduler
     # Permet au Scheduler de contacter l'hôte pour les health checks SSH
     extra_hosts:
       - "host.docker.internal:host-gateway"
