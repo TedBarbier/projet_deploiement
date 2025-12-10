@@ -21,9 +21,10 @@ Le Control Plane doit :
 
 **Control Plane :**
 
-- Reverse Proxy (Caddy, HTTPS client / HTTP agent)
-- API Python (gestion enregistrement + location)
-- Scheduler (Health Check, Migration, Expiration)
+- Reverse Proxy (Caddy, HTTPS client / HTTP agent, Load Balancing)
+- API Python (gestion enregistrement + location, scalable)
+- Autoscaler (Monitoring CPU + Scaling Docker)
+- Scheduler (Health Check, Migration, Expiration, Concurrency safety)
 - MariaDB (DB inventaire + baux)
 
 **Data Plane :**
@@ -44,11 +45,15 @@ flowchart LR
 
     subgraph CONTROL["Notre Infrastructure (Control Plane)"]
         RP["Reverse Proxy (Caddy)<br/>:443 (Client)<br/>:80 (Agent)"]
-        API["Rest API <br/>:8080"]
-        SCHED["Scheduler"]
+        API["Rest API (Scalable)<br/>:8080"]
+        SCHED["Scheduler (Replica-safe)"]
+        AS["Autoscaler"]
         DB[(MariaDB)]
     end
 
+    %% Scaling
+    AS -.->|"Monitors CPU & Scales"| API
+    
     %% Flux 0 : Enregistrement auto
     Worker -- "Flux 0: POST /api/register" --> RP
 
@@ -56,7 +61,7 @@ flowchart LR
     Client -->|"Flux 1: POST /api/rent" | RP
 
     %% Flux 2 : Proxy → API
-    RP -->|"Flux 2" | API
+    RP -->|"Flux 2 (LB)" | API
 
     %% Flux 3 : API et Scheduler interagissent avec DB
     API -->|"Flux 3" | DB
@@ -100,6 +105,7 @@ flowchart LR
 
 ### 3. Scheduler
 #### Health Check (30s)
+- **Concurrence** : Utilise `SELECT ... FOR UPDATE SKIP LOCKED` pour permettre à plusieurs instance de Scheduler de travailler en parallèle sans conflit.
 - SSH sur tous les Workers.  
 - MAJ `status` (`alive`/`dead`), `last_checked`.  
 
@@ -111,6 +117,12 @@ flowchart LR
 - Nœuds `allocated = TRUE` et `lease_end <= NOW()`.  
 - Dé-provision via Ansible (`delete_user.yml`).  
 - Libération DB (`allocated = FALSE`, `allocated_to = NULL`, `lease_end_at = NULL`).
+
+### 4. Autoscaler
+- **Monitoring** : Vérifie la charge CPU de tous les conteneurs API toutes les 5s.
+- **Scaling UP** : Si charge > 70%, ajoute un réplica (max 5).
+- **Scaling DOWN** : Si charge < 20%, retire un réplica (min 2).
+- **Action** : Utilise la commande `docker compose up --scale` à chaud.
 
 ---
 

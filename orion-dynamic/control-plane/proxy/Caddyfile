@@ -11,7 +11,11 @@ localhost:443 {
 
     # --- BACKEND API (service: api) ---
     handle_path /api/* {
-        reverse_proxy api:8080 api-2:8080 api-3:8080  # Load balancing across replicas
+        reverse_proxy api:8080 {
+            # Dynamic load balancing handled by Docker internal DNS (round-robin)
+            # or Caddy resolves multiple A records.
+            lb_policy random_choose 2
+        }
     }
 }
 
@@ -23,6 +27,8 @@ host.docker.internal:443 {
     file_server
 
     handle_path /api/* {
-        reverse_proxy api:8080 api-2:8080 api-3:8080  # Load balancing across replicas
+        reverse_proxy api:8080 {
+            lb_policy random_choose 2
+        }
     }
 }

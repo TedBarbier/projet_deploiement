@@ -7,7 +7,7 @@ import string
 import jwt
 import bcrypt
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import mysql.connector
 from mysql.connector import errorcode
 import ansible_runner
@@ -132,7 +132,7 @@ def generate_jwt(user_id, username, role):
         "user_id": user_id,
         "username": username,
         "role": role,
-        "exp": datetime.utcnow() + timedelta(seconds=JWT_EXPIRE_SECONDS)
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=JWT_EXPIRE_SECONDS)
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     # PyJWT v2 returns str, older returns bytes
@@ -344,7 +344,7 @@ def rent_nodes():
             return jsonify({"error": "Pas assez de workers libres", "found": len(nodes)}), 503
 
         allocated = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         lease_end = now + timedelta(hours=duration_hours)
 
         for node in nodes:
@@ -633,7 +633,7 @@ def register_worker():
     
 
     sql = "INSERT INTO nodes (hostname, ip, ssh_port, status) VALUES (%s, %s, %s, 'unknown')"
-
+    
     conn = None
     cursor = None
     try:
@@ -717,7 +717,8 @@ def get_ssh_password(rental_id):
 # -----------------------
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    import socket
+    return jsonify({"status": "healthy", "hostname": socket.gethostname()}), 200
 
 # -----------------------
 # Dev helper: reset DB nodes/leasing (kept for tests)

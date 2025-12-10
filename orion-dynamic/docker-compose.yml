@@ -14,57 +14,66 @@ services:
     networks:
       - lab_network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}" ]
       interval: 5s
       timeout: 5s
       retries: 10
 
-
   api:
-    container_name: orion-api
+    # container_name removed to allow multiple replicas
     build:
       context: .
       dockerfile: ./control-plane/api/Dockerfile
     restart: always
     depends_on:
-      db: 
+      db:
         condition: service_healthy
     networks:
       - lab_network
     environment:
-      - DB
+      - DB_HOST=db
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - WORKER_SSH_USER=${WORKER_SSH_USER:-root}
+      - WORKER_SSH_PASS=${WORKER_SSH_PASS:-password}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    volumes:
+      - ./control-plane/api/api.py:/app/api.py
 
-  api-2:
-    container_name: orion-api-2
+  autoscaler-api:
+    container_name: orion-autoscaler-api
     build:
-      context: .
-      dockerfile: ./control-plane/api/Dockerfile
+      context: ./control-plane/autoscaler
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/project
+    working_dir: /app
     restart: always
-    depends_on:
-      db: 
-        condition: service_healthy
     networks:
       - lab_network
     environment:
-      - DB
+      - SERVICE_NAME=api
+      - PROJECT_NAME=${COMPOSE_PROJECT_NAME:-orion-dynamic}
 
-  api-3:
-    container_name: orion-api-3
+  autoscaler-scheduler:
+    container_name: orion-autoscaler-scheduler
     build:
-      context: .
-      dockerfile: ./control-plane/api/Dockerfile
+      context: ./control-plane/autoscaler
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/project
+    working_dir: /app
     restart: always
-    depends_on:
-      db: 
-        condition: service_healthy
     networks:
       - lab_network
     environment:
-      - DB
-
+      - SERVICE_NAME=scheduler
+      - PROJECT_NAME=${COMPOSE_PROJECT_NAME:-orion-dynamic}
 
   scheduler:
-    container_name: orion-scheduler-${SCHEDULER_ID}
+    # scalable scheduler
     build:
       context: .
       dockerfile: ./control-plane/scheduler/Dockerfile
@@ -81,8 +90,8 @@ services:
       - DB_NAME=${DB_NAME}
       - WORKER_SSH_USER=root
       - WORKER_SSH_PASS=password
-      - SCHEDULER_ID=${SCHEDULER_ID}  # ID dynamique pour chaque scheduler
-    # Permet au Scheduler de contacter l'hôte pour les health checks SSH
+      # SCHEDULER_ID removed as we use Work Queue pattern
+      # Permet au Scheduler de contacter l'hôte pour les health checks SSH
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -91,6 +100,7 @@ services:
     container_name: orion-proxy
     restart: always
     ports:
+      - "80:80" # Redirection HTTP -> HTTPS
       - "443:443" # Pour les clients
     volumes:
       - ./control-plane/proxy/Caddyfile:/etc/caddy/Caddyfile

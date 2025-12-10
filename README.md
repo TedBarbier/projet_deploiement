@@ -17,10 +17,11 @@ L'orchestrateur gère :
 
 ### Control Plane
 
-- **Reverse Proxy (Caddy)** : HTTPS pour les clients, HTTP pour les agents.
-- **API Python** : Gère l’enregistrement des Workers et les locations.
-- **Scheduler** : Health Check, migration et expiration des baux.
-- **MariaDB** : Base de données stockant l’inventaire et les locations.
+- **Reverse Proxy (Caddy)** : HTTPS pour les clients, HTTP pour les agents. Fait du **Load Balancing** dynamique vers les réplicas d'API.
+- **API Python** : Gère l’enregistrement des Workers et les locations. Scalable horizontalement (replicas gérés par l'autoscaler).
+- **Autoscaler** : Service autonome qui monitore la charge CPU des conteneurs API via le socket Docker et ajuste le nombre de répliques (Scale Up/Down).
+- **Scheduler** : Service scalable (supporte le multi-instance grâce au verrouillage `SKIP LOCKED`). Gère Health Check, migration et expiration.
+- **MariaDB** : Base de données centralisée (Inventaire, Locations, Users).
 
 ### Data Plane
 
@@ -40,7 +41,8 @@ flowchart LR
 
     subgraph CONTROL["Control Plane"]
         RP["Reverse Proxy (Caddy)<br/>:443 Client<br/>:80 Agent"]
-        API["API Python :8080"]
+        API["API Python (Scalable)<br/>:8080"]
+        AS["Autoscaler<br/>(Docker Socket)"]
         SCHED["Scheduler"]
         DB[(MariaDB)]
     end
@@ -48,9 +50,10 @@ flowchart LR
     %% Flux
     Worker -- "Flux 0: POST /api/workers/register" --> RP
     Client -->|"Flux 1: POST /api/rent" | RP
-    RP -->|"Flux 2: Proxy → API" | API
+    RP -->|"Flux 2: Proxy → API (Load Balacing)" | API
     API -->|"Flux 3: API ↔ DB" | DB
     SCHED -->|"Flux 3: Scheduler ↔ DB" | DB
+    AS -.->|"Monitors CPU & Scales"| API
     API -.->|"Flux 4: Provisioning SSH (Ansible)" | Worker
     SCHED -.->|"Flux 5: Health Check & Cleanup SSH (Ansible)" | Worker
 ```
@@ -103,16 +106,57 @@ docker-compose up -d
 - `docker-compose.yml` : orchestration Control Plane
 - `Dockerfile` pour API et Scheduler
 - `Dockerfile` pour Workers (Alpine + SSH + Agent)
+- `control-plane/autoscaler/` : Code et Dockerfile de l'autoscaler
 - `Caddyfile` : configuration du Reverse Proxy
 - `init.sql` : initialisation de la base MariaDB
 - `playbooks/` : Ansible pour `create_user.yml` et `delete_user.yml`
 - `launch_workers.sh` : script pour déployer plusieurs Workers
 
+## 🚀 Démonstrations
+
+Le projet inclut deux scripts de démonstration pour valider les aspects dynamiques :
+
+### 1. Autoscaling (`demo_autoscaling.sh`)
+Simule une charge CPU sur les APIs pour déclencher le scaling horizontal.
+```bash
+cd orion-dynamic
+./demo_autoscaling.sh
+```
+- Affiche les logs de l'Autoscaler qui détecte la charge.
+- Montre Caddy redémarrant pour prendre en compte les nouveaux réplicas.
+- Vérifie que les requêtes sont bien réparties (Load Balancing).
+
+### 2. Scheduler Dynamique (`demo_scheduler.sh`)
+Lance plusieurs instances de Scheduler pour traiter une file de tâches massives.
+```bash
+cd orion-dynamic
+./demo_scheduler.sh
+```
+- Génère 300 locations dans la DB.
+- Lance 3 schedulers en parallèle.
+- Démontre l'efficacité du verrouillage `SKIP LOCKED` : aucune tâche n'est traitée deux fois, et la charge est répartie équitablement.
+
+## ✅ Tests Unitaires
+
+Une suite de tests complète (API, Scheduler, Autoscaler) est disponible.
+
+**Pré-requis** :
+```bash
+cd orion-dynamic
+pip install -r requirements-test.txt
+```
+
+**Lancer les tests** :
+```bash
+./run_unit_tests.sh
+```
+*Couverture : Auth, Locations, SSH Mock, Scaling Logic, Concurrence Scheduler.*
+
 ## API Endpoints et Commandes
 
 ### Authentification
 
-- **POST /auth/signup**
+- **POST /api/signup**
   - Crée un utilisateur.
   - Body JSON : 
     ```json
@@ -124,7 +168,7 @@ docker-compose up -d
     ```
     ou erreur.
 
-- **POST /auth/login**
+- **POST /api/login**
   - Connecte un utilisateur et retourne un JWT.
   - Body JSON : 
     ```json

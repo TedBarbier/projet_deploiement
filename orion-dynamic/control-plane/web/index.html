@@ -77,34 +77,7 @@
   <button id="confirm-extend-button">Confirmer</button>
 </div>
 
-<script>
-  document.getElementById("extend-button").addEventListener("click", () => {
-    const extendContainer = document.getElementById("extend-container");
-    extendContainer.style.display = extendContainer.style.display === "none" ? "block" : "none";
-  });
 
-  document.getElementById("confirm-extend-button").addEventListener("click", () => {
-    const additionalHours = parseFloat(document.getElementById("extend-time").value);
-    if (!isNaN(additionalHours) && additionalHours > 0) {
-      extend(selectedNodeId, additionalHours);
-    } else {
-      alert("Veuillez entrer un temps valide en heures.");
-    }
-  });
-
-  function showExtendForm(nodeId) {
-    const extendContainer = document.getElementById("extend-container");
-    extendContainer.style.display = "block";
-    document.getElementById("confirm-extend-button").onclick = () => {
-      const additionalHours = parseFloat(document.getElementById("extend-time").value);
-      if (!isNaN(additionalHours) && additionalHours > 0) {
-        extend(nodeId, additionalHours);
-      } else {
-        alert("Veuillez entrer un temps valide en heures.");
-      }
-    };
-  }
-</script>
 
 <script>
 function rentSpecialLease() {

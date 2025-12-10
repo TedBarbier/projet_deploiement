@@ -36,40 +36,7 @@ function hideLoadingIndicator() {
     }
 }
 
-async function api(path, method="GET", body=null) {
-    const headers = { "Content-Type": "application/json" };
-    const token = getToken();
 
-    if (token) headers["Authorization"] = "Bearer " + token;
-
-    console.log("Appel API:", {
-        url: API + path,
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : null
-    }); // Log des détails de l'appel API
-
-    showLoadingIndicator();
-    try {
-        const res = await fetch(API + path, {
-            method,
-            headers,
-            body: body ? JSON.stringify(body) : null
-        });
-
-        if (!res.ok) {
-            console.error(`Erreur réseau: ${res.status} ${res.statusText}`);
-            throw new Error(`Erreur réseau: ${res.status} ${res.statusText}`);
-        }
-
-        return await res.json();
-    } catch (error) {
-        console.error("Erreur lors de l'appel API:", error);
-        return { error: "Une erreur réseau est survenue. Veuillez réessayer plus tard." };
-    } finally {
-        hideLoadingIndicator();
-    }
-}
 
 async function login() {
     let username = document.getElementById("username").value;
@@ -116,7 +83,7 @@ function startDashboard(username) {
 // Stocker les données actuelles pour comparaison
 let currentNodes = null;
 
-async function api(path, method="GET", body=null) {
+async function api(path, method = "GET", body = null) {
     const headers = { "Content-Type": "application/json" };
     const token = getToken();
 
@@ -295,7 +262,7 @@ async function rent() {
         duration_hours: hours,
         count: count
     };
-    
+
     // Ajouter le password personnalisé si fourni
     if (customPassword && customPassword.trim() !== "") {
         body.ssh_password = customPassword.trim();
@@ -318,11 +285,11 @@ async function rent() {
             message += `Commande SSH:\nssh ${rental.client_user}@${rental.host_ip} -p ${rental.ssh_port}\n\n`;
         });
         alert(message);
-        
+
         // Réinitialiser le champ password
         document.getElementById("rent-password").value = "";
     }
-    
+
     loadNodes();
 }
 
@@ -381,7 +348,7 @@ function showLogin() {
     }
 }
 
-document.getElementById("password").addEventListener("keypress", function(event) {
+document.getElementById("password").addEventListener("keypress", function (event) {
     if (event.key === "Enter") {
         login();
     }
