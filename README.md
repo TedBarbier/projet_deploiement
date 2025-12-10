@@ -48,15 +48,15 @@ flowchart LR
     end
 
     %% Flux
-    Worker -- "Flux 0: POST /api/workers/register" --> RP
-    Client -->|"Flux 1: POST /api/rent" | RP
-    RP -->|"Flux 2: Proxy → API (Load Balacing)" | API
-    API -->|"Flux 3: API ↔ DB" | DB
-    SCHED -->|"Flux 3: Scheduler ↔ DB" | DB
-    AS -.->|"Monitors CPU & Scales"| API
-    AS -.->|"Monitors CPU & Scales"| SCHED
-    API -.->|"Flux 4: Provisioning SSH (Ansible)" | Worker
-    SCHED -.->|"Flux 5: Health Check & Cleanup SSH (Ansible)" | Worker
+    Worker -- "Flux 0: Register" --> RP
+    Client -->|"Flux 1: Rent" | RP
+    RP -->|"Flux 2 (Load Balancing)" | API
+    API -->|"Flux 3" | DB
+    SCHED -->|"Flux 3" | DB
+    AS -.->|"Scaling"| API
+    AS -.->|"Scaling"| SCHED
+    API -.->|"Flux 4 (Ansible)" | Worker
+    SCHED -.->|"Flux 5 (Health/Cleanup)" | Worker
 ```
 ## Fonctionnalités
 
