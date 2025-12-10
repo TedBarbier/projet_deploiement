@@ -105,6 +105,11 @@ async function api(path, method = "GET", body = null) {
         });
 
         if (!res.ok) {
+            if (res.status === 401) {
+                console.warn("Session expirée ou non autorisée (401). Déconnexion...");
+                logout();
+                return { error: "Session expirée" };
+            }
             console.error(`Erreur réseau: ${res.status} ${res.statusText}`);
             throw new Error(`Erreur réseau: ${res.status} ${res.statusText}`);
         }
@@ -119,6 +124,9 @@ async function api(path, method = "GET", body = null) {
 }
 
 async function loadNodes() {
+    const token = getToken();
+    if (!token) return;
+
     const res = await api("/api/nodes");
     const container = document.getElementById("nodes");
 
@@ -229,23 +237,30 @@ async function refreshData() {
         if (response.ok) {
             const newData = await response.json();
 
-            if (hasDataChanged(newData)) {
-                // Vérifier les changements significatifs
-                const significantChanges = newData.filter((newNode, index) => {
-                    const currentNode = currentData ? currentData[index] : null;
-                    return (
-                        !currentNode ||
-                        newNode.status !== currentNode.status ||
-                        newNode.node_id !== currentNode.node_id
-                    );
-                });
+            // S'assurer que newData est bien un tableau
+            if (Array.isArray(newData)) {
+                if (hasDataChanged(newData)) {
+                    // Vérifier les changements significatifs
+                    const significantChanges = newData.filter((newNode, index) => {
+                        const currentNode = currentData ? currentData[index] : null;
+                        return (
+                            !currentNode ||
+                            newNode.status !== currentNode.status ||
+                            newNode.node_id !== currentNode.node_id
+                        );
+                    });
 
-                if (significantChanges.length > 0) {
-                    currentData = newData; // Mettre à jour les données actuelles
-                    updateDashboard(newData); // Fonction pour mettre à jour l'interface
+                    if (significantChanges.length > 0) {
+                        currentData = newData; // Mettre à jour les données actuelles
+                        updateDashboard(newData); // Fonction pour mettre à jour l'interface
+                    }
                 }
             }
         } else {
+            if (response.status === 401) {
+                logout();
+                return;
+            }
             console.error("Erreur lors de la récupération des données.");
         }
     } catch (error) {
