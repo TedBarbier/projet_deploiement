@@ -54,6 +54,7 @@ flowchart LR
     API -->|"Flux 3: API ↔ DB" | DB
     SCHED -->|"Flux 3: Scheduler ↔ DB" | DB
     AS -.->|"Monitors CPU & Scales"| API
+    AS -.->|"Monitors CPU & Scales"| SCHED
     API -.->|"Flux 4: Provisioning SSH (Ansible)" | Worker
     SCHED -.->|"Flux 5: Health Check & Cleanup SSH (Ansible)" | Worker
 ```
