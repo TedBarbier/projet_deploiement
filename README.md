@@ -88,45 +88,62 @@ docker-compose up -d
 - `playbooks/` : Ansible pour `create_user.yml` et `delete_user.yml`
 - `launch_workers.sh` : script pour déployer plusieurs Workers
 
-## 🚀 Démonstrations
+## 🚀 Démonstration Complète (`full_demo.sh`)
 
-Le projet inclut deux scripts de démonstration pour valider les aspects dynamiques :
+Le projet inclut un script de démonstration complet qui joue un scénario réaliste couvrant toutes les fonctionnalités :
 
-### 1. Autoscaling (`demo_autoscaling.sh`)
-Simule une charge CPU sur les APIs pour déclencher le scaling horizontal.
+1.  **Cleanup** : Nettoie l'environnement.
+2.  **Infrastructure** : Démarre le Control Plane et attend que l'API soit prête.
+3.  **Scaling & Load Balancing** :
+    *   Scale l'API et le Scheduler à 3 réplicas.
+    *   Démontre le Round-Robin du Load Balancer.
+4.  **Authentification & Rôles** :
+    *   Crée un Admin et un User.
+    *   Vérifie les connexions et les tokens JWT.
+5.  **Location & Self-Healing** :
+    *   L'utilisateur loue un nœud.
+    *   **Simulation de panne** : Le worker loué est arrêté brutalement.
+    *   **Migration** : Le Scheduler détecte la pane et migre l'utilisateur vers un nouveau nœud automatiquement.
+    *   **Resurrection** : Le worker mort est redémarré.
+    *   **Cleanup de sécurité** : Le Scheduler détecte le retour du worker et supprime immédiatement le compte utilisateur qui y était (pour éviter tout accès non autorisé).
+6.  **Cycle de vie** :
+    *   Location -> Extension de bail -> Libération anticipée.
+    *   Vérification que les ressources sont bien libérées.
+
+### Lancer la démo
+
 ```bash
 cd orion-dynamic
-./demo_autoscaling.sh
+./full_demo.sh
 ```
-- Affiche les logs de l'Autoscaler qui détecte la charge.
-- Montre Caddy redémarrant pour prendre en compte les nouveaux réplicas.
-- Vérifie que les requêtes sont bien réparties (Load Balancing).
 
-### 2. Scheduler Dynamique (`demo_scheduler.sh`)
-Lance plusieurs instances de Scheduler pour traiter une file de tâches massives.
-```bash
-cd orion-dynamic
-./demo_scheduler.sh
-```
-- Génère 300 locations dans la DB.
-- Lance 3 schedulers en parallèle.
-- Démontre l'efficacité du verrouillage `SKIP LOCKED` : aucune tâche n'est traitée deux fois, et la charge est répartie équitablement.
+> **Note** : Le script est interactif et vous guidera étape par étape.
+
+## fichiers importants
+
+- `full_demo.sh` : Script de démonstration principal.
+- `start_demo.sh` : Script utilitaire pour lancer l'infrastructure.
+- `docker-compose.yml` : Orchestration Control Plane.
+- `Dockerfile` pour API et Scheduler.
+- `control-plane/autoscaler/` : Code de l'autoscaler.
+- `Caddyfile` : Configuration du Reverse Proxy.
 
 ## ✅ Tests Unitaires
 
-Une suite de tests complète (API, Scheduler, Autoscaler) est disponible.
+Une suite de tests complète (**58 tests**, couverture ~82%) couvre l'ensemble des composants critiques :
+- **Autoscaler (90%)** : Scaling, Commandes Docker, Gestion d'erreurs.
+- **API (86%)** : Endpoints, Authentification, cas limites et erreurs DB.
+- **Scheduler (76%)** : Boucle principale robuste, Health Check, Migration, Expiration.
 
-**Pré-requis** :
+Les tests utilisent `pytest` avec un mock complet de la base de données et d'Ansible, permettant une exécution rapide et isolée.
+
+### Lancer les tests
+
 ```bash
 cd orion-dynamic
-pip install -r requirements-test.txt
-```
-
-**Lancer les tests** :
-```bash
 ./run_unit_tests.sh
 ```
-*Couverture : Auth, Locations, SSH Mock, Scaling Logic, Concurrence Scheduler.*
+Ce script configure automatiquement un environnement virtuel (`venv_test`), installe les dépendances et lance les tests avec un rapport de couverture.
 
 ## API Endpoints et Commandes
 
@@ -243,13 +260,7 @@ pip install -r requirements-test.txt
     {"status": "healthy"}
     ```
 
-- **POST /api/reset**
-  - Reset DB nodes/rentals (dev/admin only).
-  - Headers : `Authorization: Bearer <token_admin>`
-  - Retour : 
-    ```json
-    {"message": "DB reset OK"}
-    ```
+
 
 ## Notes
 

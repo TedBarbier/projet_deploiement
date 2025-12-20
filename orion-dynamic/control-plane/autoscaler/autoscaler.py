@@ -44,32 +44,6 @@ def get_cpu_usage(container):
         logger.error(f"Error getting stats for container {container.name}: {e}")
         return 0.0
 
-def scale_service(replicas):
-    global last_scale_time
-    logger.info(f"Scaling service '{SERVICE_NAME}' to {replicas} replicas...")
-    try:
-        # We assume we are running in a docker compose project.
-        # We can issue a command to docker compose.
-        # Since we are inside a container, we mapped the docker socket.
-        # The easiest way to scale a specific compose service programmatically via the SDK isn't direct.
-        # However, we can use the 'docker compose' command if installed, OR just run more containers?
-        # Running "docker compose up -d --scale api=N" is the standard way.
-        # But we don't have 'docker compose' binary inside 'python:3.10-slim'.
-        # We can install it or rely on the host?
-        
-        # Alternative: Use subprocess to call docker CLI if installed?
-        # We only installed python docker sdk. 
-        # Actually, let's just use os.system since we are mounting the socket, 
-        # BUT we need the docker cli binary. 
-        # Let's assume for this MVP we might need to install docker-cli in the generic Dockerfile
-        # or... we can cheat. We can't easily scale a "compose service" just by starting containers with the SDK
-        # simply, because Compose manages the network aliases and naming.
-        
-        # Let's update the Dockerfile to install docker-cli or docker-compose-plugin.
-        pass 
-    
-    except Exception as e:
-        logger.error(f"Failed to scale: {e}")
 
 # RE-WRITING Scale Function for subprocess with installed docker cli
 def scale_service_cmd(replicas):

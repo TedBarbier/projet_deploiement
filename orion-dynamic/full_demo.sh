@@ -14,6 +14,9 @@ ADMIN_PASS="admin"
 USER_NAME="user"
 USER_PASS="user"
 
+# Ensure Docker is in PATH (Mac specific)
+export PATH=$PATH:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin
+
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[1;34m'

@@ -507,7 +507,9 @@ def job_cleanup_resurrected_nodes():
 
 
 # --- Main loop ---
-if __name__ == "__main__":
+
+# --- Main loop ---
+def main():
     logging.info("--- Démarrage du Scheduler Orion-Dynamic (Work Queue Mode) ---")
     schedule.every(2).seconds.do(job_health_check)
     schedule.every(2).seconds.do(job_migrate_dead_nodes)
@@ -515,5 +517,11 @@ if __name__ == "__main__":
     schedule.every(2).seconds.do(job_cleanup_resurrected_nodes)
     job_health_check()  # première exécution
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logging.error(f"Erreur dans la boucle principale: {e}")
         time.sleep(1)
+
+if __name__ == "__main__":
+    main()

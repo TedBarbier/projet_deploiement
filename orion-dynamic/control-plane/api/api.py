@@ -724,33 +724,6 @@ def health_check():
     return jsonify({"status": "healthy", "hostname": socket.gethostname()}), 200
 
 # -----------------------
-# Dev helper: reset DB nodes/leasing (kept for tests)
-# -----------------------
-@app.route('/reset', methods=['POST'])
-@require_admin
-def reset_database():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "DB non disponible"}), 500
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM rentals;")
-        cur.execute("ALTER TABLE rentals AUTO_INCREMENT = 1;")
-        cur.execute("DELETE FROM nodes;")
-        cur.execute("ALTER TABLE nodes AUTO_INCREMENT = 1;")
-        conn.commit()
-        return jsonify({"message": "DB reset OK"}), 200
-    except Exception as e:
-        app.logger.error(f"Erreur reset_database: {e}")
-        try:
-            conn.rollback()
-        except:
-            pass
-        return jsonify({"error": "Erreur serveur interne"}), 500
-    finally:
-        conn.close()
-
-# -----------------------
 # Startup main
 # -----------------------
 
@@ -758,100 +731,6 @@ if __name__ == "__main__":
     app.logger.info("--- Demarrage du serveur Flask en mode DEBUG ---")
     app.run(host='0.0.0.0', port=8080, debug=True)
 
-@app.route("/rent/test", methods=["POST"])
-@require_auth
-def rent_test_node():
-    """
-    Endpoint pour tester la location d'un nœud pour 2 minutes.
-    """
-    import secrets, string
-    from datetime import datetime, timedelta
 
-    client_name = request.user["username"]
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "DB non disponible"}), 500
-
-    try:
-        conn.start_transaction()
-        cur = conn.cursor(dictionary=True)
-
-        # Récupérer un seul nœud libre
-        cur.execute("""
-            SELECT * FROM nodes
-            WHERE status='alive' AND allocated=FALSE AND needs_cleanup=FALSE
-            ORDER BY last_checked DESC
-            LIMIT 1
-            FOR UPDATE
-        """)
-        node = cur.fetchone()
-
-        if not node:
-            conn.rollback()
-            return jsonify({"error": "Pas de nœud libre disponible"}), 503
-
-        now = datetime.utcnow()
-        lease_end = now + timedelta(minutes=2)
-
-        node_id = node["id"]
-        host_ip = node["ip"]
-        port = node["ssh_port"]
-
-        # Exception Docker : remplacer l'IP par host.docker.internal si IP interne Docker
-        if host_ip.startswith("172.17."):
-            host_ip = "host.docker.internal"
-
-        client_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
-
-        # Chiffrer le mot de passe avant stockage
-        encrypted_pass = encrypt_password(client_pass)
-
-        # Insert rental avec password chiffré
-        insert_rental = """
-            INSERT INTO rentals (node_id, user_id, leased_from, leased_until, active, ssh_password)
-            VALUES (%s, %s, %s, %s, TRUE, %s)
-        """
-        cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end, encrypted_pass))
-        cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
-        rental_id = cur.lastrowid
-
-        # Provisioning
-        success = run_ansible_provision(
-            playbook_name='create_user.yml',
-            host_ip=host_ip,
-            host_port=port,
-            client_user=client_name,
-            client_pass=client_pass
-        )
-
-        if not success:
-            app.logger.error(f"Provisioning failed for node {node_id}, rolling back transaction")
-            conn.rollback()
-            return jsonify({"error": "Échec du provisioning; transaction annulée"}), 500
-
-        conn.commit()
-        return jsonify({
-            "rental_id": rental_id,
-            "host_ip": host_ip,
-            "ssh_port": port,
-            "client_user": client_name,
-            "client_pass": client_pass,
-            "leased_until": lease_end.isoformat(),
-        }), 200
-
-    except Exception as e:
-        app.logger.error(f"Erreur interne rent_test_node: {e}")
-        try:
-            conn.rollback()
-        except:
-            pass
-        return jsonify({"error": "Erreur serveur interne"}), 500
-    finally:
-        try:
-            cur.close()
-        except:
-            pass
-        conn.close()
 
 
