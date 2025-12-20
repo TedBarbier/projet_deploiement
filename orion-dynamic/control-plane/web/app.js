@@ -159,11 +159,13 @@ async function loadNodes() {
                 container.appendChild(nodeDiv);
             }
 
-            const leaseEnd = node.lease ? new Date(node.lease.leased_until + 'Z') : null; // Ajouter 'Z' pour indiquer UTC
-            if (leaseEnd) {
-                // Convertir l'heure UTC en heure locale
-                const localLeaseEnd = leaseEnd.toLocaleString('fr-FR', {
-                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, // Fuseau horaire local détecté automatiquement
+            let localLeaseEnd = "";
+            let leaseInfo = "";
+
+            if (node.lease) {
+                const leaseEnd = new Date(node.lease.leased_until + 'Z');
+                localLeaseEnd = leaseEnd.toLocaleString('fr-FR', {
+                    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                     year: 'numeric',
                     month: '2-digit',
                     day: '2-digit',
@@ -172,23 +174,26 @@ async function loadNodes() {
                     second: '2-digit'
                 });
 
-                console.log(`Nœud ${node.node_id} - Fin du bail (locale) :`, localLeaseEnd);
-
-                nodeDiv.innerHTML = `
-                    <b>Node ${node.node_id}</b><br>
-                    Hostname: ${node.hostname}<br>
-                    Port SSH: ${node.ssh_port}<br>
-                    Status: ${node.status}<br>
-                    Allocated: ${node.allocated}<br>
-                    ${node.lease ? `
-                        <p><b>Lease ${node.lease.rental_id}</b><br>
-                        Jusqu'à (heure locale) : ${localLeaseEnd}</p>
-                        <p><b>Mot de passe SSH :</b> <button onclick="fetchPassword(${node.lease.rental_id}, this)">Afficher</button></p>
-                        <button onclick="release(${node.lease.rental_id})">Release</button>
-                        <button onclick="showExtendForm(${node.lease.rental_id})">Extend</button>
-                    ` : `<i>Libre</i>`}
+                leaseInfo = `
+                    <p><b>Lease ${node.lease.rental_id}</b><br>
+                    ${node.lease.renter_username ? `<b>Loué par:</b> ${node.lease.renter_username}<br>` : ''}
+                    Jusqu'à (heure locale) : ${localLeaseEnd}</p>
+                    <p><b>Mot de passe SSH :</b> <button onclick="fetchPassword(${node.lease.rental_id}, this)">Afficher</button></p>
+                    <button onclick="release(${node.lease.rental_id})">Release</button>
+                    <button onclick="showExtendForm(${node.lease.rental_id})">Extend (Custom)</button>
                 `;
+            } else {
+                leaseInfo = `<i>Libre</i>`;
             }
+
+            nodeDiv.innerHTML = `
+                <b>Node ${node.node_id}</b><br>
+                Hostname: ${node.hostname}<br>
+                Port SSH: ${node.ssh_port}<br>
+                Status: ${node.status}<br>
+                Allocated: ${node.allocated}<br>
+                ${leaseInfo}
+            `;
         });
     }
 }
@@ -411,7 +416,7 @@ resetInactivityTimeout();
 setInterval(loadNodes, 30000); // Rafraîchit toutes les 30 secondes
 
 // Appeler la fonction de rafraîchissement périodiquement
-setInterval(refreshData, 30000); // Toutes les 30 secondes
+// setInterval(refreshData, 30000); // Désactivé car doublon avec loadNodes
 
 // Fonction pour mettre à jour le tableau des nœuds
 function updateDashboard(nodes) {

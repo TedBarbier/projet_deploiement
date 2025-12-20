@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Alloué ou non (sera utilisé comme "lock" rapide)
     allocated BOOLEAN NOT NULL DEFAULT FALSE,
 
+    -- Dirty flag pour le nettoyage après crash
+    needs_cleanup BOOLEAN NOT NULL DEFAULT FALSE,
+
     -- Géré par un scheduler
     scheduler_id INT,
 
@@ -28,6 +31,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 -- Index pour la table nodes
 CREATE INDEX idx_nodes_status ON nodes(status);
 CREATE INDEX idx_nodes_allocated ON nodes(allocated);
+CREATE INDEX idx_nodes_needs_cleanup ON nodes(needs_cleanup);
 CREATE INDEX idx_nodes_scheduler_id ON nodes(scheduler_id);
 
 -- ===========================

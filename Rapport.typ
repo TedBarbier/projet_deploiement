@@ -8,115 +8,105 @@
 #show: doc => insa-document(
   "pfe",
   insa: "cvl",
-  cover-top-left: [*Rapport projet déploiement*],
+  cover-top-left: [*Rapport de Projet : Déploiement & Infrastructure*],
   cover-middle-left: [
-    *BARBIER Ted*
-
-
-    Département STI
+    *BARBIER Ted* \
+    Département STI \
+    4ème Année
   ],
-  page-header: "Rapport projet déploiement",
+  page-header: "Orion-Dynamic : PaaS à inventaire dynamique",
   include-back-cover: true,
   doc,
 )
 
 #set align(left)
 #set heading(numbering: "1.1.1.")
-#counter(page).update(2)
 
-#outline()
+#outline(indent: auto)
 #pagebreak()
 
 = Introduction
 
-Dans le cadre de l'unité d'enseignement "Déploiement & Infrastructure as Code", il nous a été demandé de concevoir et de réaliser une infrastructure simulant un fournisseur de *Platform as a Service* (PaaS). L'objectif principal est de créer un système capable de gérer dynamiquement un parc de machines (les "Workers"), de les louer à des clients pour une durée déterminée, et d'assurer la continuité de service même en cas de panne de matériel.
+Dans le cadre de l'unité d'enseignement "Déploiement & Infrastructure as Code", ce projet vise à concevoir un prototype de *Platform as a Service* (PaaS) baptisé *Orion-Dynamic*.
 
-Le projet, baptisé *Orion-Dynamic* dans mon cas, se distingue par son approche de découverte automatique des ressources : contrairement à une configuration statique où le serveur connaît à l'avance ses nœuds, ici, c'est aux machines de s'enregistrer spontanément auprès du système central.
+L'objectif est de gérer dynamiquement un parc de machines (les "Workers"), de les louer à des clients pour une durée déterminée, et d'assurer la continuité de service même en cas de panne de matériel. Ce projet explore le concept d'*infrastructure opportuniste* : les ressources de calcul ne sont pas connues à l'avance par le serveur, mais s'enregistrent spontanément. Ce modèle répond aux besoins de plateformes modernes où les ressources peuvent être volatiles, géographiquement distribuées et éphémères.
 
-= Architecture & Concept
+= Architecture Système : Philosophie Micro-services
 
-Le système repose sur une séparation claire entre le plan de contrôle (*Control Plane*) et le plan de données (*Data Plane*).
+Le système repose sur une séparation stricte entre le plan de contrôle (*Control Plane*) et le plan de données (*Data Plane*).
 
-== Le Data Plane : Les Workers
-Le *Data Plane* est constitué de l'ensemble des ressources de calcul disponibles à la location. Dans notre simulation, ces "machines" sont représentées par des conteneurs légers (Alpine Linux) exécutant un serveur SSH.
+== Le Data Plane : Les Workers "Opportunistes"
+Le *Data Plane* est constitué des ressources de calcul. Dans notre simulation, ces machines sont représentées par des conteneurs légers (Alpine Linux) exécutant un serveur SSH.
 
-Chaque Worker embarque un *Agent* (script Python `agent.py`). Au démarrage de la machine, cet agent a pour unique responsabilité de contacter l'API centrale pour signaler sa présence, transmettant ses informations de connexion (IP, port SSH, nom d'hôte). Cette approche "Push" (l'agent s'annonce) plutôt que "Pull" (le serveur scanne le réseau) offre une grande flexibilité : n'importe quel nœud, quel que soit son réseau, peut rejoindre le cluster tant qu'il peut joindre l'API.
+Chaque Worker embarque un *Agent* (`agent.py`). Au démarrage de la machine, cet agent a pour unique responsabilité de contacter l'API centrale pour signaler sa présence.
+- *Choix du mode Push* : Contrairement à une configuration statique où le serveur doit scanner le réseau (Pull), c'est ici le nœud qui "pousse" ses informations. Cela permet d'outrepasser les contraintes de NAT/Firewall et d'ajouter des capacités de calcul instantanément sans reconfigurer le serveur central.
 
-== Le Control Plane : Le Cerveau
-Le *Control Plane* orchestre l'ensemble du système. Il est composé de plusieurs micro-services conteneurisés :
+== Le Control Plane : L'intelligence orchestrée
+Le *Control Plane* est composé de plusieurs micro-services conteneurisés, chacun ayant une responsabilité unique :
 
-/ *Reverse Proxy (Caddy)*: Le point d'entrée unique. Il sécurise les accès (terminaison TLS simulée), route le trafic (HTTP vers les agents, HTTPS vers les clients) et assure l'équilibrage de charge (*Load Balancing*) vers les réplicas de l'API.
-/ *API (Python)*: Le cœur réactif du système. Elle expose les points d'entrée pour l'enregistrement des workers et la gestion des locations par les clients. Elle est conçue pour être "Stateless" afin de pouvoir être dupliquée horizontalement selon la charge.
-/ *Scheduler*: Le gestionnaire de tâches de fond. Indépendant de l'API, il boucle en permanence pour effectuer trois missions critiques :
-  - *Health Check* : Vérifier que chaque worker est vivant (ping SSH).
-  - *Migration* : Si un worker loué ne répond plus, déplacer immédiatement son client vers un noeud sain.
-  - *Expiration* : Libérer les ressources dont le bail est terminé.
-/ *Autoscaler*: Un service autonome qui surveille la consommation CPU des conteneurs de l'API et ajuste dynamiquement leur nombre (scaling horizontal) via le socket Docker.
-/ *Base de Données (MariaDB)*: La source de vérité unique, stockant l'inventaire des machines, les utilisateurs et les baux actifs.
+/ *Reverse Proxy (Caddy)*: Sert d'API Gateway unique. Il assure l'équilibrage de charge (*Load Balancing*) vers les réplicas de l'API.
+/ *API (Python/FastAPI)*: Le cœur réactif du système. Elle gère l'enregistrement des workers et les baux clients. Elle est strictement "Stateless".
+/ *Scheduler*: Assure la cohérence de l'infrastructure. Il effectue les "Health Checks", les migrations et le nettoyage des baux expirés.
+/ *Autoscaler*: Un service de régulation en boucle fermée qui ajuste le nombre de réplicas de l'API en fonction de la charge CPU réelle détectée sur le socket Docker.
+/ *Base de Données (MariaDB)*: Stocke l'état du parc, les utilisateurs et les contrats de location (baux).
 
-= Choix Techniques & Implémentation
+= Choix Techniques & Justifications Critiques
 
-== Infrastructure as Code (IaC) & Provisioning
-L'ensemble de l'environnement de développement est défini dans un fichier `docker-compose.yml`, garantissant la reproductibilité.
+== Pourquoi Python et l'API REST ?
+Le choix de Python s'est imposé pour sa rapidité de prototypage et sa compatibilité native avec les outils d'automatisation comme Ansible.
+- *Justification REST* : Nous avons privilégié REST plutôt que gRPC ou des brokers de messages. Dans un contexte de PaaS ouvert, REST est le standard universel : n'importe quel terminal peut s'enregistrer via une simple requête HTTP JSON, garantissant une interopérabilité maximale.
 
-Pour la configuration des Workers, nous avons choisi d'utiliser *Ansible*. Lorsqu'une location est validée ou qu'une migration est nécessaire, ce n'est pas l'API qui exécute des commandes SSH brutes, mais un playbook Ansible (`create_user.yml` ou `delete_user.yml`). Cela assure une idempotence et une gestion propre des erreurs lors de la création ou de la suppression des comptes utilisateurs sur les machines louées.
+== MariaDB : Le choix de l'intégrité transactionnelle
+Le choix d'une base SQL (MariaDB) plutôt que NoSQL est dicté par le besoin de *cohérence forte*.
+- *Problématique de concurrence* : Deux clients ne doivent jamais pouvoir louer la même machine simultanément.
+- *Solution* : Les transactions ACID de MariaDB permettent de verrouiller l'état d'un worker lors de son allocation, rendant l'opération atomique.
 
-== Gestion de la Concurrence : SKIP LOCKED
-Un défi majeur dans les systèmes distribués est d'éviter que deux processus ne traitent la même tâche simultanément (ex: deux schedulers essayant de migrer le même client).
+== Sécurité, Isolation et Monétisation via Ansible
+Le but du service est de louer une ressource tout en garantissant qu'elle reste sous notre contrôle technique (condition sine qua non pour la facturation).
+- *Stratégie* : Nous utilisons Ansible pour créer un utilisateur temporaire avec des droits restreints.
+- *Justification* : Plutôt que de donner un accès root (risqué), nous isolons le client. Ansible assure l'idempotence : si la création échoue, le système peut retenter sans corrompre la machine. À l'expiration du bail, Ansible supprime l'utilisateur, garantissant que la ressource redevient disponible pour un nouveau cycle de facturation.
 
-Pour résoudre cela sans verrouillage global bloquant, nous utilisons la clause SQL `SELECT ... FOR UPDATE SKIP LOCKED` dans le Scheduler. Cela permet de récupérer les tâches (workers à vérifier) qui ne sont pas *déjà* verrouillées par une autre instance du scheduler. Grâce à cette technique, nous pouvons lancer autant d'instances du Scheduler que nécessaire pour paralléliser la charge de travail sans risque de collision.
+= Analyse de la Stratégie de Développement : Le Cas Vagrant
 
-== Scalabilité Automatique (Autoscaling)
-Plutôt que d'utiliser des outils lourds comme Kubernetes pour ce projet, nous avons implémenté un *Autoscaler* léger en Python. Il interroge périodiquement les métriques des conteneurs via l'API Docker.
-- Si la charge CPU moyenne des APIs dépasse 70%, il ajoute un réplica.
-- Si elle descend sous 20%, il en retire un.
-Caddy détecte automatiquement ces changements DNS et redistribue le trafic, rendant l'opération transparente pour l'utilisateur.
+Une phase importante du projet a concerné la mise en place d'une *parité d'environnement* via Vagrant.
 
-== Alternative Abandonnée : Vagrant
-Dans une première itération, nous avons tenté d'isoler complètement l'environnement de développement dans une Machine Virtuelle (VM) gérée par *Vagrant*. L'objectif était de fournir un environnement totalement reproductible, indépendant de l'OS hôte (Mac/Linux/Windows).
+== L'intention : Un environnement universel
+L'objectif était d'utiliser Vagrant pour créer une machine virtuelle (VM) "bac à sable" standardisée. Cette VM devait héberger l'intégralité du projet (Docker, API, Workers) afin de garantir que n'importe quel développeur, qu'il soit sur Windows, Linux ou macOS, travaille sur une configuration bit-à-bit identique.
 
-Nous avons configuré un `Vagrantfile` utilisant une box `hashicorp-education/ubuntu-24-04` avec 4GB de RAM et 2 vCPUs. Le provisionnement par script Shell devait installer Docker et lancer le projet automatiquement :
+== L'impasse technique : Conflit d'architecture (ARM vs x86)
+La tentative a été abandonnée après environ deux heures de tests infructueux.
+- *Cause du blocage* : Le développement s'est déroulé sur une architecture *Apple Silicon (ARM64)*. La virtualisation d'images Linux standard (souvent optimisées pour x86_64) au sein de Vagrant a provoqué des instabilités majeures, des plantages du processus de provisionnement et des timeouts I/O lors de l'installation de Docker.
+- *Décision d'ingénierie* : Le choix a été fait de pivoter vers une approche *Native Docker Compose*.
+- *Leçon retenue* : Si la virtualisation (Vagrant) offre une isolation supérieure, elle introduit une couche de complexité (virtualisation imbriquée) parfois incompatible avec les nouvelles architectures matérielles. La conteneurisation native s'est révélée être un compromis plus pragmatique et performant.
 
-```ruby
-Vagrant.configure("2") do |config|
-  config.vm.box = "hashicorp-education/ubuntu-24-04"
-  # Forward ports for Caddy and API
-  config.vm.network "forwarded_port", guest: 443, host: 8443
-  config.vm.provision "shell", inline: <<-SHELL
-    # Installation Docker & Compose
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg ...
-    docker compose up -d
-  SHELL
-end
-```
+= Implémentation de la Résilience
 
-Cependant, cette approche a été abandonnée suite à des instabilités majeures : le processus de provisionnement "crashait" systématiquement lors de l'installation des paquets ou du lancement des conteneurs (problèmes probables de timeouts I/O). Face à ces blocages techniques qui ralentissaient le développement, nous avons privilégié l'utilisation directe de Docker Compose sur l'hôte, plus performante et fiable dans notre contexte.
+== Gestion de la Concurrence massive : SKIP LOCKED
+Un défi majeur est d'éviter que deux instances du Scheduler ne traitent le même worker simultanément (ex: deux migrations pour une même panne).
+- *Solution technique* : Utilisation de la clause SQL `SELECT ... FOR UPDATE SKIP LOCKED`.
+- *Analyse* : Cela permet de paralléliser le Control Plane. Chaque instance "pioche" une tâche libre sans bloquer les autres instances. C'est ce qui permet au système de supporter des milliers de nœuds sans ralentissement.
 
-= Fonctionnement du Projet
-
-Le cycle de vie typique d'une ressource dans *Orion-Dynamic* suit ces étapes :
-
-+ *Enregistrement Spontané* : Un nouveau Worker démarre. Son agent envoie une requête `POST /api/register`. Il apparaît immédiatement comme "libre" dans l'inventaire.
-+ *Location (Allocation)* : Un client authentifié demande une machine pour 2 heures via `POST /api/rent`. L'API sélectionne un nœud libre, exécute le playbook Ansible pour créer un compte utilisateur temporaire, et renvoie les identifiants de connexion au client.
-+ *Surveillance & Résilience* : Le Scheduler "ping" la machine toutes les 30 secondes. Si le client éteint accidentellement sa machine (simulation de panne), le Scheduler le détecte. Il trouve une nouvelle machine libre, y recrée le compte utilisateur (Migration), et met à jour la base de données. Le client perd sa connexion courante mais peut se reconnecter immédiatement sur la nouvelle IP fournie par l'API.
-+ *Fin de Bail* : À l'heure de fin prévue, le Scheduler déclenche le "nettoyage". Le compte utilisateur est supprimé via Ansible, et la machine est marquée comme "libre" pour un futur client.
-
-= Améliorations & Perspectives
-
-== Réalisations Avancées
-Au-delà du cahier des charges basique, nous avons intégré :
-- Un *Load Balancing* dynamique avec Caddy.
-- Un *Autoscaling* fonctionnel des instances API.
-- Une gestion robuste de la *concurrence* base de données.
-
-== Vers la Production
-Pour transformer ce POC (*Proof of Concept*) en solution de production réelle, plusieurs axes seraient à prioriser :
-- *Sécurité* : Actuellement, le socket Docker est monté dans l'autoscaler, ce qui est risqué. Il faudrait utiliser une API sécurisée ou un orchestrateur dédié. De plus, la gestion des secrets (clés SSH) devrait passer par un coffre-fort numérique (type HashiCorp Vault).
-- *Orchestration* : Migrer le Control Plane vers *Kubernetes* permettrait de bénéficier nativement de l'autoscaling, des *Liveness Probes* et de la gestion des configurations, remplaçant avantageusement nos scripts "maison".
-- *Observabilité* : Remplacer les logs texte par une stack *Prometheus + Grafana* pour visualiser en temps réel la charge, le nombre de locations et l'état de santé du parc.
+== Cycle de vie d'une ressource (WorkFlow)
++ *Découverte* : Le Worker s'annonce via `POST /api/workers/register`.
++ *Allocation* : Le client appelle `POST /api/rent`. L'API sélectionne un nœud, exécute le playbook Ansible et renvoie les accès.
++ *Surveillance* : Le Scheduler effectue un Health Check (Ping SSH) toutes les 30s. Après 3 échecs, la *Migration* est déclenchée : le client est déplacé sur un nœud sain de manière transparente.
++ *Libération/Extension* : Le client peut prolonger son bail via `/api/extend` ou laisser le Scheduler nettoyer la machine à l'échéance.
 
 = Conclusion
 
-Ce projet a permis de mettre en pratique les concepts fondamentaux du déploiement moderne : conteneurisation, orchestration, interaction API/Agent et automatisation via Ansible. L'architecture réactive mise en place offre une base solide et résiliente, capable de s'adapter à la charge et aux pannes, répondant ainsi pleinement aux exigences d'un service PaaS moderne.
+Le projet *Orion-Dynamic* valide la possibilité de construire un service PaaS robuste sur un inventaire volatil. Les choix techniques effectués privilégient la résilience (Migration auto), la scalabilité (Autoscaling) et l'intégrité (SQL/Ansible). Le pivot stratégique de Vagrant vers Docker illustre la capacité d'adaptation nécessaire à la gestion de projets complexes sur des architectures hétérogènes.
 
+#pagebreak()
+= Annexes Techniques
 
+== Détails des Endpoints API
+- `POST /api/signup` : Création de compte utilisateur.
+- `POST /api/login` : Authentification et génération de JWT.
+- `POST /api/rent` : Location de workers (allocation dynamique).
+- `GET /api/nodes` : Monitoring en temps réel du parc.
+
+== Structure du Projet
+- `/control-plane` : Micro-services Python et Dockerfiles.
+- `/playbooks` : Logic Ansible d'isolation utilisateur.
+- `Caddyfile` : Configuration du Load Balancer.
+- `launch_workers.sh` : Script de scalabilité du Data Plane.

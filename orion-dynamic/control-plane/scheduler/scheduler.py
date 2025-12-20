@@ -8,6 +8,7 @@ import paramiko
 import mysql.connector
 from mysql.connector import errorcode
 import ansible_runner
+import socket
 from datetime import datetime
 from cryptography.fernet import Fernet
 
@@ -22,7 +23,7 @@ DB_NAME = os.getenv('DB_NAME')
 
 WORKER_SSH_USER = os.getenv('WORKER_SSH_USER', 'root')
 WORKER_SSH_PASS = os.getenv('WORKER_SSH_PASS', 'password')
-SSH_TIMEOUT = 5  # secondes
+SSH_TIMEOUT = 5
 
 # Clé de chiffrement (doit être la même que l'API)
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
@@ -31,7 +32,9 @@ if not ENCRYPTION_KEY:
     ENCRYPTION_KEY = Fernet.generate_key().decode()
 cipher_suite = Fernet(ENCRYPTION_KEY.encode())
 
-# --- Helper functions ---
+# -----------------------
+# Helper functions
+# -----------------------
 def decrypt_password(encrypted_password):
     """Déchiffre un mot de passe."""
     if not encrypted_password:
@@ -42,15 +45,17 @@ def decrypt_password(encrypted_password):
         logging.error(f"Erreur déchiffrement: {e}")
         return None
 
-# --- DB connection ---
-def get_db_connection():
+# -----------------------
+# DB connection
+# -----------------------
+def get_db_connection(autocommit=False):
     try:
         return mysql.connector.connect(
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASS,
             database=DB_NAME,
-            autocommit=True
+            autocommit=autocommit
         )
     except mysql.connector.Error as err:
         logging.error(f"Erreur de connexion à la DB: {err}")
@@ -108,7 +113,23 @@ def run_ansible_task(playbook_name, host_ip, host_port, client_user, client_pass
     return True
 
 # --- Health check ---
+def check_socket(ip, port):
+    try:
+        if ip == 'host.docker.internal':
+            # Resolve manually to be sure? Not needed if socket does it.
+            pass
+        sock = socket.create_connection((ip, port), timeout=SSH_TIMEOUT)
+        sock.close()
+        return True
+    except Exception as e:
+        # logging.warning(f"Socket connection failed for {ip}:{port} : {e}")
+        return False
+
 def check_node_health(ip, port):
+    # Pre-check TCP socket before Paramiko
+    if not check_socket(ip, port):
+        return 'dead'
+
     client = None
     try:
         client = paramiko.SSHClient()
@@ -127,10 +148,11 @@ def check_node_health(ip, port):
 # Refactor: Work Queue pattern (SKIP LOCKED) to allow multiple schedulers
 def job_health_check():
     logging.info("[Tâche 1] Exécution du Health Check...")
-    conn = get_db_connection()
+    conn = get_db_connection(autocommit=True) # Explicit autocommit
     if not conn:
         return
     try:
+        # We need a transaction for SELECT ... FOR UPDATE
         conn.start_transaction()
         cursor = conn.cursor(dictionary=True)
 
@@ -140,7 +162,7 @@ def job_health_check():
             SELECT id, ip, ssh_port 
             FROM nodes 
             WHERE 
-                (last_checked IS NULL OR last_checked < NOW() - INTERVAL 30 SECOND)
+                (last_checked IS NULL OR last_checked < NOW() - INTERVAL 5 SECOND)
             LIMIT 10
             FOR UPDATE SKIP LOCKED
         """)
@@ -172,15 +194,15 @@ def job_health_check():
             conn.commit()
             
             # Now perform checks (unlocked)
-            update_conn = get_db_connection() # New connection for updates (autocommit=True)
+            # Use a NEW connection for updates to ensure they are committed independently
+            update_conn = get_db_connection(autocommit=True)
             if update_conn:
                 update_cursor = update_conn.cursor()
                 for node in nodes:
                     ip_to_use = resolve_worker_ip(node['ip'])
                     status = check_node_health(ip_to_use, node['ssh_port'])
-                    # We might overwrite a status change if API acted in between (e.g. allocation)
-                    # Ideally we check only if allocated=False, but health check is general.
-                    # Let's just update safely.
+                    logging.info(f"Node {node['id']} ({node['ip']} -> {ip_to_use}) -> {status}")
+                    
                     try:
                         update_cursor.execute(
                             "UPDATE nodes SET status=%s WHERE id=%s",
@@ -222,13 +244,17 @@ def job_migrate_dead_nodes():
             return
 
         for node in dead_nodes:
-            logging.info(f"[Tâche 2] Réattribution pour le nœud {node['id']}...")
-            reassign_rental_on_node_failure(node['id'])
+            try:
+                reassign_rental_on_node_failure(node['id'], cursor)
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Failed to migrate node {node['id']}: {e}")
+                conn.rollback()
         
         # Metadata or logic to mark as processed? 
         # reassign_rental_on_node_failure likely updates the rental/node state,
         # effectively removing it from this query's result set for next time.
-        conn.commit()
+        # conn.commit() # This commit is now handled inside the loop for each node.
 
     except Exception as e:
         logging.error(f"[Tâche 2] Erreur migration : {e}")
@@ -237,6 +263,119 @@ def job_migrate_dead_nodes():
     finally:
         if conn and conn.is_connected():
             conn.close()
+
+
+
+def reassign_rental_on_node_failure(dead_node_id, cursor):
+    """
+    Déplace les locations actives du nœud mort vers un autre nœud.
+    Marque le nœud mort comme "dirty" (needs_cleanup=TRUE).
+    Met à jour la DB via le cursor fourni (faisant partie de la transaction appelante).
+    """
+    logging.info(f"[Tâche 2] Réattribution pour le nœud {dead_node_id}...")
+    
+    try:
+        # 1. Identifier les locations actives sur ce nœud (Lock row if needed, but we hold Node lock)
+        # Using the passed cursor (reusing transaction/connection)
+
+        cursor.execute("SELECT * FROM rentals WHERE node_id=%s AND active=TRUE FOR UPDATE", (dead_node_id,))
+        affected_rentals = cursor.fetchall()
+        
+        if not affected_rentals:
+            # Pas de locations actives, on marque juste le nœud comme non alloué mais toujours mort
+            # (Le health check le passera en alive s'il revient)
+            # Pas de locations actives, on marque juste le nœud comme non alloué mais dirty
+            # (Le health check le passera en alive s'il revient, mais il devra être nettoyé)
+            cursor.execute("UPDATE nodes SET allocated=FALSE, needs_cleanup=TRUE WHERE id=%s", (dead_node_id,))
+            # conn.commit() # Caller will commit
+            return
+
+        logging.info(f"Migration de {len(affected_rentals)} locations depuis le nœud {dead_node_id}...")
+        
+        # 2. Trouver des nœuds de remplacement
+        # On cherche autant de nœuds que nécessaire
+        needed = len(affected_rentals)
+        cursor.execute(f"""
+            SELECT * FROM nodes 
+            WHERE status='alive' AND allocated=FALSE AND id != %s
+            LIMIT {needed}
+            FOR UPDATE SKIP LOCKED
+        """, (dead_node_id,))
+        replacements = cursor.fetchall()
+        logging.info(f"Trouvé {len(replacements)} nœuds de remplacement (besoin: {needed})")
+
+        if len(replacements) < needed:
+            logging.error(f"Pas assez de nœuds libres pour migrer tout le monde (besoin: {needed}, dispo: {len(replacements)})")
+            # On migre ce qu'on peut ? Ou on fail tout ?
+            # Pour l'instant, on migre ce qu'on peut.
+        
+        # 3. Effectuer la migration
+        for i, rental in enumerate(affected_rentals):
+            if i >= len(replacements):
+                logging.error(f"Impossible de migrer la location {rental['id']} (user {rental['user_id']}): plus de nœud dispo.")
+                continue
+
+            new_node = replacements[i]
+            
+            # Option A: On met à jour la location existante (simple)
+            # MAIS on perd la trace que l'user était sur l'ancien nœud pour le cleanup !
+            # Option B: On ferme l'ancienne location (active=FALSE) et on en crée une nouvelle.
+            # C'est mieux pour l'historique et pour le cleanup du nœud mort.
+            
+            # Fermer l'ancienne location
+            # On note qu'elle a été interrompue/migrée ? Active=FALSE suffit.
+            cursor.execute("UPDATE rentals SET active=FALSE WHERE id=%s", (rental['id'],))
+            
+            # Créer la nouvelle location
+            # On garde les mêmes infos (user, dates, password)
+            sql_insert = """
+                INSERT INTO rentals (node_id, user_id, leased_from, leased_until, active, ssh_password)
+                VALUES (%s, %s, %s, %s, TRUE, %s)
+            """
+            cursor.execute(sql_insert, (
+                new_node['id'], 
+                rental['user_id'], 
+                rental['leased_from'], 
+                rental['leased_until'], 
+                rental['ssh_password']
+            ))
+            new_rental_id = cursor.lastrowid
+            
+            # Marquer le nouveau nœud comme alloué
+            cursor.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (new_node['id'],))
+            
+            # Provisioning du nouveau nœud
+            # On doit le faire ici (ou via une queue). On le fait synchrone (bloquant mais simple).
+            # Mais c'est critique.
+            # Récupérer username
+            cursor.execute("SELECT username FROM users WHERE id=%s", (rental['user_id'],))
+            user_row = cursor.fetchone()
+            client_user = user_row['username']
+            
+            ip_to_use = resolve_worker_ip(new_node['ip'])
+            client_pass = decrypt_password(rental['ssh_password'])
+            
+            # Lancer Ansible en background ou synchrone ? 
+            # Le scheduler est monothread ici, ça va bloquer.
+            success = run_ansible_task('create_user.yml', ip_to_use, new_node['ssh_port'], client_user, client_pass)
+            if success:
+                logging.info(f"Migration réussie: Rental {rental['id']} -> Nouveau Rental {new_rental_id} sur Node {new_node['id']}")
+            else:
+                logging.error(f"Migration partielle: Provisioning échoué sur le nouveau nœud {new_node['id']}")
+                # On laisse quand même le rental actif ? On risque d'avoir un user sans accès.
+        
+        # 4. Marquer l'ancien nœud comme non alloué et dirty
+        cursor.execute("UPDATE nodes SET allocated=FALSE, needs_cleanup=TRUE WHERE id=%s", (dead_node_id,))
+        
+        # conn.commit() # Caller will commit
+
+    except Exception as e:
+        logging.error(f"Erreur reassign_rental_on_node_failure: {e}")
+        # La transaction sera rollback par l'appelant
+        raise e
+    # finally: # No connection to close here, it's managed by the caller
+    #     if conn and conn.is_connected():
+    #         conn.close()
 
 
 # --- Expiration des baux ---
@@ -303,30 +442,41 @@ def job_expire_leases():
             conn.close()
 
 def job_cleanup_resurrected_nodes():
-    logging.info("[Tâche 4] Nettoyage des nœuds ressuscités...")
+    logging.info("[Tâche 4] Nettoyage des nœuds ressuscités (dirty)...")
     conn = get_db_connection()
     if not conn:
         return
     try:
         conn.start_transaction()
         cursor = conn.cursor(dictionary=True)
-        # Sélectionner les nœuds qui étaient morts mais sont maintenant alive
-        cursor.execute("SELECT * FROM nodes WHERE status='alive' AND allocated=FALSE FOR UPDATE SKIP LOCKED")
+        # Sélectionner les nœuds 'alive' mail marqués comme 'dirty' (needs_cleanup)
+        cursor.execute("SELECT * FROM nodes WHERE status='alive' AND needs_cleanup=TRUE FOR UPDATE SKIP LOCKED")
         nodes = cursor.fetchall()
+        
         for node in nodes:
-            # Chercher les rentals actifs qui ont été déplacés depuis ce nœud
+            logging.info(f"[Tâche 4] Traitement du nœud dirty {node['id']} ({node['hostname']})...")
+            
+            # Chercher TOUS les utilisateurs distincts ayant eu une location sur ce nœud
+            # On veut nettoyer tout historique potentiel.
             cursor.execute("""
-                SELECT r.user_id, u.username, r.ssh_password
+                SELECT DISTINCT u.username, r.ssh_password
                 FROM rentals r
                 JOIN users u ON r.user_id = u.id
-                WHERE r.node_id=%s AND r.active=TRUE
+                WHERE r.node_id=%s
             """, (node['id'],))
             rentals = cursor.fetchall()
+            
+            node_cleanup_success = True
+            
+            if not rentals:
+                 logging.info(f"[Tâche 4] Aucun utilisateur trouvé dans l'historique pour le nœud {node['id']}. Marquage comme clean.")
+            
             for rental in rentals:
                 client_user = rental['username']
                 ip_to_use = resolve_worker_ip(node['ip'])
                 
-                # Déchiffrer le password
+                # Déchiffrer le password (s'il y en a plusieurs, on prend celui du tuple courant)
+                # Note: Si un user a eu plusieurs passwords, le playbook forcera la suppression de toute façon par username.
                 client_pass = decrypt_password(rental.get('ssh_password'))
                 
                 # Supprimer l'utilisateur du nœud ressuscité
@@ -336,23 +486,15 @@ def job_cleanup_resurrected_nodes():
                     logging.info(f"[Tâche 4] Utilisateur {client_user} supprimé du nœud {node['id']}")
                 else:
                     logging.error(f"[Tâche 4] Échec suppression utilisateur {client_user} sur le nœud {node['id']}")
+                    node_cleanup_success = False
             
-            # Libérer le nœud (clean up artifacts if needed, though here allocated=FALSE already)
-            # Logic here seems to be "clean up users" on nodes that came back.
-            # We don't change allocated=FALSE because it is already FALSE.
-            # But the query selected them.
-            # Wait, if we don't update anything, they will be selected again!
-            # We need to mark them as 'clean'. 
-            # In current schema, maybe we don't have a 'clean' flag.
-            # Existing logic: cursor.execute("UPDATE nodes SET allocated=FALSE WHERE id=%s", (node['id'],))
-            # Even if it is already false, updating it doesn't change state to "exclude from query".
-            # The query is: status='alive' AND allocated=FALSE
-            # If we don't change status or allocated, it loops forever.
-            # Maybe the intention was to handle nodes that were marked allocated=FALSE *because* they died?
-            # If so, how do we distinguish "just died and reset" from "clean"?
-            # For now, I will keep existing logic but just add SKIP LOCKED.
-            # NOTE: There is a risk of infinite loop here if logic is flawed, but I follow existing pattern.
-            cursor.execute("UPDATE nodes SET allocated=FALSE WHERE id=%s", (node['id'],))
+            # Si tout s'est bien passé (ou s'il n'y avait rien à faire), on marque le nœud comme propre
+            if node_cleanup_success:
+                cursor.execute("UPDATE nodes SET needs_cleanup=FALSE WHERE id=%s", (node['id'],))
+                logging.info(f"[Tâche 4] Nœud {node['id']} nettoyé et marqué comme CLEAN (disponible).")
+            else:
+                logging.warning(f"[Tâche 4] Nœud {node['id']} toujours DIRTY suite à des erreurs.")
+
         conn.commit()
         logging.info("[Tâche 4] Nettoyage terminé.")
     except Exception as e:
@@ -367,10 +509,10 @@ def job_cleanup_resurrected_nodes():
 # --- Main loop ---
 if __name__ == "__main__":
     logging.info("--- Démarrage du Scheduler Orion-Dynamic (Work Queue Mode) ---")
-    schedule.every(30).seconds.do(job_health_check)
-    schedule.every(10).seconds.do(job_migrate_dead_nodes)
-    schedule.every(1).minute.do(job_expire_leases)
-    schedule.every(1).minute.do(job_cleanup_resurrected_nodes)
+    schedule.every(2).seconds.do(job_health_check)
+    schedule.every(2).seconds.do(job_migrate_dead_nodes)
+    schedule.every(10).seconds.do(job_expire_leases)
+    schedule.every(2).seconds.do(job_cleanup_resurrected_nodes)
     job_health_check()  # première exécution
     while True:
         schedule.run_pending()

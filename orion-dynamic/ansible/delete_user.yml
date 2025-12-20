@@ -7,68 +7,42 @@
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
   tasks:
+    # Install shadow to ensure userdel/groupdel are robust
+    - name: Install shadow package (Alpine)
+      ansible.builtin.shell: apk add --no-cache shadow
+      ignore_errors: yes
+
     - name: Get all PIDs for the user
       ansible.builtin.shell: |
-        ps -o pid= -u {{ target_user }} 2>/dev/null || echo ""
+        pgrep -u {{ target_user }} || echo ""
       register: user_pids
       ignore_errors: yes
 
-    - name: Kill all user processes by PID
+    - name: Kill all user processes
       ansible.builtin.shell: |
-        for pid in {{ user_pids.stdout }}; do
-          kill -9 $pid 2>/dev/null || true
-        done
-      when: user_pids.stdout != ""
+        pkill -KILL -u {{ target_user }} || true
       ignore_errors: yes
 
-    - name: Kill SSH sessions (Alpine compatible)
-      ansible.builtin.shell: |
-        # Méthode 1: killall (disponible sur Alpine)
-        killall -u {{ target_user }} 2>/dev/null || true
-        # Méthode 2: tuer les processus sshd spécifiques
-        ps | grep "sshd.*{{ target_user }}" | grep -v grep | awk '{print $1}' | while read pid; do kill -9 $pid 2>/dev/null || true; done
-      ignore_errors: yes
-
-    - name: Wait for sessions to close
+    - name: Wait for processes to die
       ansible.builtin.pause:
         seconds: 2
 
-    - name: Ensure the client user is removed
+    - name: Force remove user (Shell fallback)
+      ansible.builtin.shell: |
+        userdel -r -f {{ target_user }} || deluser --remove-home {{ target_user }} || true
+      register: userdel_result
+      ignore_errors: yes
+
+    - name: Ensure the client user is removed (Ansible Module)
       ansible.builtin.user:
         name: "{{ target_user }}"
         state: absent
         remove: yes
         force: yes
+      when: userdel_result.rc != 0
 
-    - name: Remove user's home directory
-      ansible.builtin.file:
-        path: "/home/{{ target_user }}"
-        state: absent
-      ignore_errors: yes
-
-    - name: Remove all files owned by the user
+    - name: Final cleanup check
       ansible.builtin.shell: |
-        find / -user {{ target_user }} -exec rm -rf {} + 2>/dev/null || true
-      ignore_errors: yes
-
-    - name: Remove user's SSH keys
-      ansible.builtin.file:
-        path: "/home/{{ target_user }}/.ssh"
-        state: absent
-      ignore_errors: yes
-
-    - name: Remove user's cron jobs
-      ansible.builtin.file:
-        path: "/var/spool/cron/crontabs/{{ target_user }}"
-        state: absent
-      ignore_errors: yes
-
-    - name: Remove SUID/SGID files owned by the user
-      ansible.builtin.shell: |
-        find / -type f \( -perm -4000 -o -perm -2000 \) -user {{ target_user }} -exec rm -f {} + 2>/dev/null || true
-      ignore_errors: yes
-
-    - name: Clean temporary files
-      ansible.builtin.shell: |
-        find /tmp /var/tmp -user {{ target_user }} -exec rm -rf {} + 2>/dev/null || true
+        rm -rf /home/{{ target_user }}
+        rm -rf /var/spool/cron/crontabs/{{ target_user }}
       ignore_errors: yes

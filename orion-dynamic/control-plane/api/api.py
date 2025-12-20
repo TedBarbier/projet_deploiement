@@ -332,7 +332,7 @@ def rent_nodes():
         # Récupérer les noeuds libres
         cur.execute(f"""
             SELECT * FROM nodes
-            WHERE status='alive' AND allocated=FALSE
+            WHERE status='alive' AND allocated=FALSE AND needs_cleanup=FALSE
             ORDER BY last_checked DESC
             LIMIT {count}
             FOR UPDATE
@@ -367,9 +367,9 @@ def rent_nodes():
                 VALUES (%s, %s, %s, %s, TRUE, %s)
             """
             cur.execute(insert_rental, (node_id, request.user["user_id"], now, lease_end, encrypted_pass))
-            cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
             rental_id = cur.lastrowid
-
+            cur.execute("UPDATE nodes SET allocated=TRUE WHERE id=%s", (node_id,))
+            
             # Provisioning
             success = run_ansible_provision(
                 playbook_name='create_user.yml',
@@ -568,9 +568,11 @@ def list_nodes():
         if request.user["role"] == "admin":
             cur.execute("""
                 SELECT n.id as node_id, n.hostname, n.ssh_port, n.status, n.allocated,
-                       r.id as rental_id, r.user_id as rental_user_id, r.leased_from, r.leased_until, r.active
+                       r.id as rental_id, r.user_id as rental_user_id, r.leased_from, r.leased_until, r.active,
+                       u.username as renter_username
                 FROM nodes n
                 LEFT JOIN rentals r ON r.node_id = n.id AND r.active = TRUE
+                LEFT JOIN users u ON r.user_id = u.id
             """)
         else:
             cur.execute("""
@@ -604,6 +606,7 @@ def list_nodes():
                 nodes[nid]["lease"] = {
                     "rental_id": r["rental_id"],
                     "user_id": r["rental_user_id"],
+                    "renter_username": r.get("renter_username"),
                     "leased_from": r["leased_from"].isoformat() if r["leased_from"] else None,
                     "leased_until": r["leased_until"].isoformat() if r["leased_until"] else None,
                     "active": bool(r["active"]),
@@ -777,7 +780,7 @@ def rent_test_node():
         # Récupérer un seul nœud libre
         cur.execute("""
             SELECT * FROM nodes
-            WHERE status='alive' AND allocated=FALSE
+            WHERE status='alive' AND allocated=FALSE AND needs_cleanup=FALSE
             ORDER BY last_checked DESC
             LIMIT 1
             FOR UPDATE
