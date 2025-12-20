@@ -13,19 +13,47 @@ L'orchestrateur gère :
 
 ---
 
-## 🔹 Architecture
+## 🔹 Architecture : Philosophie Micro-services
 
-### Control Plane
+Le système repose sur une séparation stricte entre le **Control Plane** (Intelligence) et le **Data Plane** (Ressources).
 
-- **Reverse Proxy (Caddy)** : HTTPS pour les clients, HTTP pour les agents. Fait du **Load Balancing** dynamique vers les réplicas d'API.
-- **API Python** : Gère l’enregistrement des Workers et les locations. Scalable horizontalement (replicas gérés par l'autoscaler).
-- **Autoscaler** : Service autonome qui monitore la charge CPU des conteneurs API via le socket Docker et ajuste le nombre de répliques (Scale Up/Down).
-- **Scheduler** : Service scalable (supporte le multi-instance grâce au verrouillage `SKIP LOCKED`). Gère Health Check, migration et expiration.
-- **MariaDB** : Base de données centralisée (Inventaire, Locations, Users).
+### 1. Data Plane : Les Workers "Opportunistes" (Push Mode)
+Contrairement aux architectures classiques où le serveur scanne le réseau (Pull), nous utilisons un **mode Push**.
+- Chaque Worker embarque un `agent.py` léger.
+- Au démarrage, l'agent contacte l'API pour signaler sa présence.
+- **Avantage** : Permet de traverser les NAT/Firewalls et d'ajouter des capacités de calcul instantanément sans reconfigurer le serveur central.
 
-### Data Plane
+### 2. Control Plane : L'intelligence orchestrée
+Composé de micro-services stateless conteneurisés :
 
-- **Workers** : Conteneurs ou machines simulées, avec SSH et un agent d’enregistrement (`agent.py`).
+- **Reverse Proxy (Caddy)** : API Gateway unique. Gère le **Load Balancing** dynamique vers les réplicas d'API.
+- **API (FastAPI)** : Cœur réactif et stateless. Gère l'enregistrement et les baux.
+- **Scheduler** : Assure la cohérence (Health Check, Migration, Expiration). Utilise le verrouillage `SKIP LOCKED` pour la scalabilité.
+- **Autoscaler** : Régulation en boucle fermée (PID) qui ajuste les réplicas d'API selon la charge CPU.
+- **MariaDB** : Vérité terrain. Garantit l'intégrité via des transactions **ACID** strictes (essentiel pour éviter les doubles locations).
+- **Ansible** : Moteur de sécurité. Isole les clients en créant/supprimant des utilisateurs éphémères sur les workers (garantie de nettoyage sans accès root).
+
+---
+
+## 💡 Choix Techniques & Résilience
+
+### Pourquoi MariaDB & SQL ?
+Pour la **Cohérence Forte**. Dans un système de location, deux clients ne doivent jamais obtenir la même ressource. Les transactions `SELECT ... FOR UPDATE` garantissent l'atomicité des allocations.
+
+### Gestion de la Concurrence massive
+Le Scheduler utilise `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Cela permet de lancer plusieurs instances du Scheduler en parallèle.
+- Chaque instance "pioche" une tâche libre (ex: migration) sans bloquer les autres.
+
+### Sécurité & Isolation
+Nous ne donnons jamais d'accès `root` aux clients.
+- **Provisioning** : Ansible crée un utilisateur UNIX dédié lors de la location.
+- **Nettoyage** : À l'expiration ou après une panne, Ansible supprime cet utilisateur, garantissant qu'aucune donnée résiduelle ne persiste pour le client suivant.
+
+### Pivot Technique : Vagrant vs Docker
+Initialement prévu sur Vagrant pour une isolation totale, le projet a pivoté vers une architecture **Docker Native**.
+- **Raison** : Instabilités majeures de la virtualisation imbriquée (Linux sur Vagrant sur macOS ARM64/Apple Silicon).
+- **Bénéfice** : Docker Compose offre ici de meilleures performances et une portabilité immédiate sur toutes les architectures modernes.
 
 ---
 
