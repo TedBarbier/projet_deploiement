@@ -59,9 +59,60 @@ Initialement prévu sur Vagrant pour une isolation totale, le projet a pivoté v
 
 ## Flowchart
 
-![Architecture Flowchart](diagram.svg)
+```mermaid
+flowchart TD
+    %% --- Styles ---
+    classDef client fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:black;
+    classDef control fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:black;
+    classDef worker fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:black;
+    classDef db fill:#fff9c4,stroke:#fbc02d,stroke-width:2px,color:black;
 
-## Fonctionnalités
+    %% --- Noeuds ---
+    Client["Client (curl/CLI)"]:::client
+
+    subgraph CONTROL["Control Plane"]
+        direction TB
+        
+        %% Niveau 1 : Entrée et Autoscaler alignés
+        RP["Reverse Proxy (Caddy)<br/>:443 Client | :80 Agent"]:::control
+        AS["Autoscaler<br/>(Docker Socket)"]:::control
+        
+        %% Astuce : Lien invisible pour placer AS à droite de RP
+        RP ~~~ AS
+
+        %% Niveau 2 : Services
+        API["API Python (Scalable)<br/>:8080"]:::control
+        SCHED["Scheduler"]:::control
+        
+        %% Niveau 3 : Base de données
+        DB[("MariaDB")]:::db
+    end
+
+    subgraph DATA["Monde Externe (Data Plane)"]
+        Worker["Workers (Pré-existants)<br/>Agent 'agent.py'"]:::worker
+    end
+
+    %% --- Flux (Edges) ---
+    
+    %% Flux Entrants
+    Client -->|"Flux 1:<br/>POST /api/rent"| RP
+    Worker -->|"Flux 0:<br/>POST /api/workers/register"| RP
+
+    %% Flux Internes Control Plane
+    %% J'ai mis 3 tirets (--->) ici pour allonger la flèche et faire de la place au texte
+    RP --->|"Flux 2: Proxy → API<br/>(Load Balancing)"| API
+    
+    API <-->|"Flux 3:<br/>Read/Write"| DB
+    SCHED <-->|"Flux 3:<br/>Polling Tasks"| DB
+    
+    %% Scaling (Lignes pointillées pour ne pas surcharger)
+    AS -.->|"Monitors CPU<br/>& Scales"| API
+    AS -.->|"Monitors CPU<br/>& Scales"| SCHED
+
+    %% Flux Sortants vers Workers
+    API -.->|"Flux 4: Provisioning SSH<br/>(Ansible)"| Worker
+    SCHED -.->|"Flux 5: Health Check<br/>& Cleanup SSH"| Worker
+```# Fonctionnalités
 
 ### Agent (`agent.py`)
 
