@@ -112,7 +112,8 @@ flowchart TD
     %% Flux Sortants vers Workers
     API -.->|"Flux 4: Provisioning SSH<br/>(Ansible)"| Worker
     SCHED -.->|"Flux 5: Health Check<br/>& Cleanup SSH"| Worker
-```# Fonctionnalités
+```
+# Fonctionnalités
 
 ### Agent (`agent.py`)
 
